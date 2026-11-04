@@ -100,6 +100,24 @@ jobs:
           swift --version
           Scripts/build-apple-ffmpeg.sh
 
+      - name: Build Apple Python runtime (iOS device)
+        working-directory: yingxia
+        run: |
+          # Without this, the Xcode embed step silently ships an app with no
+          # Python runtime, and Python (type 3) sources are then offered
+          # nowhere in the app. build-apple-python.sh ios produces
+          # build/ApplePython/iphoneos, which the embed step copies in.
+          if ! command -v python3.14 >/dev/null 2>&1; then
+            brew install python@3.14
+          fi
+          export HOST_PYTHON="${HOST_PYTHON:-$(command -v python3.14)}"
+          echo "HOST_PYTHON=$HOST_PYTHON"
+          "$HOST_PYTHON" --version
+          Scripts/build-apple-python.sh ios
+          test -f build/ApplePython/iphoneos/Frameworks/Python.framework/Python
+          test -f build/ApplePython/iphoneos/PythonHost/host.py
+          echo "Apple Python runtime ready"
+
       - name: Generate Xcode project and build TVBox-iOS (unsigned)
         working-directory: yingxia
         run: |
