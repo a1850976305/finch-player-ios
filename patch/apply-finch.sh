@@ -51,5 +51,35 @@ p.write_text(text.replace(old, new, 1))
 print("Pan115Files.derive rewritten as an explicit loop")
 PYEOF
 
+# Swift 6 capture fix (Xcode 26.3 runner, 2026-11-04): in
+# Subscription.sniffingScripts, the closure on the `pending` line
+# captures `sites` textually before the local `var sites = sites`
+# that shadows the property, so the compiler rejects it
+# ("closure captures 'sites' before it is declared"). Moving the
+# local copy above the `pending` line is semantics-identical:
+# the copy is initialized from the property and nothing mutates
+# either one in between, so the filter sees the same elements,
+# and the early-return path still returns `self` untouched.
+python3 - <<'PYEOF'
+import pathlib, sys
+p = pathlib.Path("Sources/TVCore/ScriptSniffing.swift")
+text = p.read_text()
+old = """    func sniffingScripts(http: HTTPClient) async -> Subscription {
+        let pending = sites.indices.filter { sites[$0].needsSniffing }
+        guard !pending.isEmpty else { return self }
+        var sites = sites
+"""
+new = """    func sniffingScripts(http: HTTPClient) async -> Subscription {
+        var sites = sites
+        let pending = sites.indices.filter { sites[$0].needsSniffing }
+        guard !pending.isEmpty else { return self }
+"""
+if old not in text:
+    print("ScriptSniffing.sniffingScripts pattern not found; refusing to patch blindly", file=sys.stderr)
+    sys.exit(1)
+p.write_text(text.replace(old, new, 1))
+print("ScriptSniffing.sniffingScripts reordered so the local sites copy precedes the closure")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
