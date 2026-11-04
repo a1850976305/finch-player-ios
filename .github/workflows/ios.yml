@@ -53,12 +53,14 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install xcodegen maven || true
-          brew list xcodegen maven || true
-          xcodegen --version || true
-          mvn -version || true
-          node --version || true
+          brew install xcodegen maven autoconf automake libtool pkg-config cmake
+          brew list xcodegen maven autoconf automake libtool pkg-config cmake
+          xcodegen --version
+          mvn -version
+          node --version
+          autoconf --version | head -1
           python3 -m pip install --user uv 2>/dev/null || pipx install uv || true
+          command -v uv || true
 
       - name: Build on-device runtimes (iOS device)
         working-directory: yingxia
