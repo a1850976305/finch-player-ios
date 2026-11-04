@@ -62,14 +62,24 @@ jobs:
 
       - name: Build on-device runtimes (iOS device)
         working-directory: yingxia
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME }}
         run: |
-          export JAVA_HOME="$(/usr/libexec/java_home -v 19)"
           echo "JAVA_HOME=$JAVA_HOME"
+          echo "=== build-java-host ==="
           Scripts/build-java-host.sh
+          echo "=== build-script-host ==="
+          NODE_BIN="$(command -v node)"
+          NODE_LICENSE_CANDIDATE="$(dirname "$(dirname "$NODE_BIN")")/LICENSE"
+          if [ -f "$NODE_LICENSE_CANDIDATE" ]; then
+            export NODE_LICENSE="$NODE_LICENSE_CANDIDATE"
+          else
+            curl -fsSL -o "$RUNNER_TEMP/NODE_LICENSE" "https://raw.githubusercontent.com/nodejs/node/main/LICENSE"
+            export NODE_LICENSE="$RUNNER_TEMP/NODE_LICENSE"
+          fi
+          echo "NODE_BIN=$NODE_BIN NODE_LICENSE=$NODE_LICENSE"
           Scripts/build-script-host.sh
+          echo "=== build-python-host ==="
           Scripts/build-python-host.sh
+          echo "=== package-apple-runtime ios ==="
           Scripts/package-apple-runtime.sh ios
 
       - name: Generate Xcode project and build TVBox-iOS (unsigned)
