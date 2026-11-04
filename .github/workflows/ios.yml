@@ -1,0 +1,104 @@
+# Finch Player iOS — cloud build on GitHub's macOS runner.
+#
+# Why this file exists: upstream Yingxia (jo32/tvbox-silicon) has NO
+# iOS build workflow in main (verified 2026-11-04). This workflow is
+# the missing piece, written for this starter repo.
+#
+# What it does, in order:
+#   1. Checks out THIS starter repo (workflow + patch + subscription + sources).
+#   2. Clones Yingxia upstream (depth 1, no history).
+#   3. Runs patch/apply-finch.sh to rename display name + iOS bundle ID.
+#   4. Builds the on-device runtimes and the TVBox-iOS scheme, unsigned.
+#   5. Packages the .app as an unsigned IPA and uploads it as an artifact.
+#
+# What it does NOT do:
+#   - It does NOT sign with an Apple Developer certificate (no secrets
+#     are set up here). The IPA is unsigned: install it with a sideload
+#     tool that re-signs with your own Apple ID, or add signing +
+#     TestFlight upload later (that step needs your own certificates).
+#   - It has NOT been run on a macOS runner yet. The first run IS the
+#     test: Xcode version, XcodeGen, JDK, Maven, Node and uv versions
+#     on the runner may differ from the upstream README, and the log
+#     will say so. Fix from the log, do not guess a version.
+#
+# Trigger: manually, from the repo's Actions tab (workflow_dispatch),
+# or on every push to main.
+
+name: Build Finch Player iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - name: Check out starter repo
+        uses: actions/checkout@v4
+
+      - name: Clone Yingxia upstream
+        run: git clone --depth 1 https://github.com/jo32/tvbox-silicon.git yingxia
+
+      - name: Apply Finch branding
+        run: bash patch/apply-finch.sh yingxia
+
+      - name: Set up JDK 19
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "19"
+
+      - name: Install build tools
+        run: |
+          brew install xcodegen maven || true
+          brew list xcodegen maven || true
+          xcodegen --version || true
+          mvn -version || true
+          node --version || true
+          python3 -m pip install --user uv 2>/dev/null || pipx install uv || true
+
+      - name: Build on-device runtimes (iOS device)
+        working-directory: yingxia
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
+        run: |
+          export JAVA_HOME="$(/usr/libexec/java_home -v 19)"
+          echo "JAVA_HOME=$JAVA_HOME"
+          Scripts/build-java-host.sh
+          Scripts/build-script-host.sh
+          Scripts/build-python-host.sh
+          Scripts/package-apple-runtime.sh ios
+
+      - name: Generate Xcode project and build TVBox-iOS (unsigned)
+        working-directory: yingxia
+        run: |
+          xcodegen generate
+          xcodebuild -project TVBox.xcodeproj \
+            -scheme TVBox-iOS \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -derivedDataPath build/derived \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: yingxia
+        run: |
+          APP=$(find build/derived/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "APP=$APP"
+          test -n "$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r ../FinchPlayer-unsigned.ipa Payload
+          ls -lh ../FinchPlayer-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FinchPlayer-unsigned
+          path: FinchPlayer-unsigned.ipa
+          if-no-files-found: error
