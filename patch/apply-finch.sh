@@ -81,5 +81,135 @@ p.write_text(text.replace(old, new, 1))
 print("ScriptSniffing.sniffingScripts reordered so the local sites copy precedes the closure")
 PYEOF
 
+# iOS 26 build fixes (Xcode 26.3 / SDK 26.2 runner, 2026-11-04):
+# the user's phone is iOS 26, so iOS 27-only code paths would never
+# run there anyway (#available(iOS 27) is false on iOS 26). Stubbing
+# them to their iOS 26 fallback is semantics-identical on iOS 26,
+# and it lets the released SDK compile upstream main at all.
+# The other four are Swift 6.2 strictness/type-inference fixes.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label}: pattern not found in {path}; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"{label}: patched")
+
+# 1. ExternalDisplay: iOS 27 scene accessory does not exist in SDK 26.2.
+# On iOS 26 the registrar already returned a plain UIViewController,
+# so always returning one is identical on the user's phone.
+patch("App/ExternalDisplay.swift",
+      "        if #available(iOS 27.0, *) { return ExternalDisplayAccessoryController() }\n        return UIViewController()",
+      "        return UIViewController()",
+      "ExternalDisplay registrar")
+patch("App/ExternalDisplay.swift",
+      "    private var registration: UISceneAccessoryRegistration?",
+      "    private var registration: Any?",
+      "ExternalDisplay registration type")
+patch("App/ExternalDisplay.swift",
+      "        registration = registerSceneAccessory(UISceneAccessory.externalNonInteractive(sceneConfiguration: configuration))",
+      "        registration = nil // iOS 27 accessory removed for iOS 26 SDK build",
+      "ExternalDisplay register call")
+patch("App/ExternalDisplay.swift",
+      "        unregisterSceneAccessory(registration)",
+      "        // iOS 27 accessory removed for iOS 26 SDK build",
+      "ExternalDisplay unregister call")
+
+# 2. VideoEnhancement: iOS 27 interpolator limit query does not exist
+# in SDK 26.2. On iOS 26 the function already fell through to this
+# 1280x720 bound, so returning it directly is identical there.
+patch("App/VideoEnhancement.swift",
+      """    private static func interpolationFits(width: Int, height: Int) -> Bool {
+        if #available(macOS 27, iOS 27, tvOS 27, *) {
+            guard let side = VTLowLatencyFrameInterpolationConfiguration.maximumDimension(forSpatialScaleFactor: 1),
+                  let pixels = VTLowLatencyFrameInterpolationConfiguration.maximumPixelCount(forSpatialScaleFactor: 1) else { return false }
+            return max(width, height) <= side && width * height <= pixels
+        }
+        return max(width, height) <= 1280 && width * height <= 1280 * 720
+    }""",
+      """    private static func interpolationFits(width: Int, height: Int) -> Bool {
+        // iOS 27 query removed for iOS 26 SDK build; on iOS 26 this
+        // fallback was already the path taken.
+        return max(width, height) <= 1280 && width * height <= 1280 * 720
+    }""",
+      "VideoEnhancement interpolationFits")
+
+# 3. DiscoverArtwork: CGFloat vs Double '-' ambiguity. All operands
+# are CGFloat, so annotate the literals as CGFloat explicitly.
+patch("App/DiscoverArtwork.swift",
+      "                    .opacity(max(0, 1 - max(0, scrollY - heroHeight * 0.45) / (heroHeight * 0.55)))",
+      "                    .opacity(max(CGFloat(0), CGFloat(1) - max(CGFloat(0), scrollY - heroHeight * CGFloat(0.45)) / (heroHeight * CGFloat(0.55))))",
+      "DiscoverArtwork opacity")
+
+# 4. DiscoverSearchView: erfc overload ambiguity. Make `outside`
+# explicitly CGFloat so the CGFloat erfc overload is unambiguous.
+patch("App/DiscoverSearchView.swift",
+      "            let outside = (location * reach - half) / blur",
+      "            let outside: CGFloat = (CGFloat(location) * reach - half) / blur",
+      "DiscoverSearchView erfc")
+
+# 5. LiveRoomsView: Result's closure is synchronous, so `try await`
+# inside it cannot be passed as a synchronous function. Restructure
+# to do/catch inside the async task closure; same success/failure
+# values are delivered to the task group.
+patch("App/LiveRoomsView.swift",
+      "group.addTask { await (platform, Result { try await LiveCatalog.search(platform, keyword: query) }) }",
+      "group.addTask { do { return (platform, .success(try await LiveCatalog.search(platform, keyword: query))) } catch { return (platform, .failure(error)) } }",
+      "LiveRoomsView task group")
+
+# 6. DiscoverView (DiscoverHero): break the body up the way the
+# compiler asks ("distinct sub-expressions"). The subtitle and
+# overview strings are computed once as typed String lets before
+# the GeometryReader, then used as plain Text(String) values.
+patch("App/DiscoverView.swift",
+      """    var body: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Group {
+                    if let logo = details?.logo {
+                        TMDBArtwork(url: logo, maxPixels: 1000, fill: false)
+                            .accessibilityLabel(item.name)
+                    } else {
+                        Text(item.name).font(.system(size: 40, weight: .semibold))
+                            .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
+                    }
+                }""",
+      """    var body: some View {
+        let subtitle: String = [details?.genres.prefix(2).joined(separator: " / ") ?? item.genreNames,
+                      details?.date ?? item.year.map(String.init) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+        let overview: String = "「\\(item.name)」" + item.overview
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Group {
+                    if let logo = details?.logo {
+                        TMDBArtwork(url: logo, maxPixels: 1000, fill: false)
+                            .accessibilityLabel(item.name)
+                    } else {
+                        Text(item.name).font(.system(size: 40, weight: .semibold))
+                            .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
+                    }
+                }""",
+      "DiscoverView hero lets")
+patch("App/DiscoverView.swift",
+      """                Text([details?.genres.prefix(2).joined(separator: " / ") ?? item.genreNames,
+                      details?.date ?? item.year.map(String.init) ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.system(size: 14)).lineLimit(1).frame(height: 17)""",
+      """                Text(subtitle)
+                    .font(.system(size: 14)).lineLimit(1).frame(height: 17)""",
+      "DiscoverView hero subtitle")
+patch("App/DiscoverView.swift",
+      """                Text("「\\(item.name)」" + item.overview)
+                    .font(.system(size: 12)).lineLimit(2).multilineTextAlignment(.center)""",
+      """                Text(overview)
+                    .font(.system(size: 12)).lineLimit(2).multilineTextAlignment(.center)""",
+      "DiscoverView hero overview")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
