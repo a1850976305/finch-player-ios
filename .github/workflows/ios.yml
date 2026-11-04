@@ -84,6 +84,22 @@ jobs:
           echo "=== package-apple-runtime ios ==="
           Scripts/package-apple-runtime.sh ios
 
+      - name: Select Xcode 26 and build FFmpeg
+        working-directory: yingxia
+        run: |
+          ls /Applications | grep -E '^Xcode.*\.app$' || true
+          xcodebuild -version || true
+          XCODE26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XCODE26" ]; then
+            echo "Selecting $XCODE26"
+            sudo xcode-select -s "$XCODE26/Contents/Developer"
+          else
+            echo "No Xcode 26 found on runner, keeping default"
+          fi
+          xcodebuild -version
+          swift --version
+          Scripts/build-apple-ffmpeg.sh
+
       - name: Generate Xcode project and build TVBox-iOS (unsigned)
         working-directory: yingxia
         run: |
