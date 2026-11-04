@@ -211,5 +211,34 @@ patch("App/DiscoverView.swift",
       "DiscoverView hero overview")
 PYEOF
 
+# Follow-up fixes (2026-11-04, run 41833962542): the iOS 26 patch
+# cleared 8 of the 10 step-9 errors, leaving 2 in the same two files.
+# DiscoverArtwork had a second, unpatched opacity expression with
+# the same CGFloat/Double '-' ambiguity (line 162, trailer branch);
+# the erfc fix alone was not enough, because the argument itself
+# was still convertible to both Double and CGFloat, so force the
+# whole erfc argument to Double (the C erfc overload) explicitly.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label}: pattern not found in {path}; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"{label}: patched")
+
+patch("App/DiscoverArtwork.swift",
+      "                    .opacity(max(0, 1 - max(0, scrollY) / (heroHeight * 0.35)))",
+      "                    .opacity(max(CGFloat(0), CGFloat(1) - max(CGFloat(0), scrollY) / (heroHeight * CGFloat(0.35))))",
+      "DiscoverArtwork trailer opacity")
+patch("App/DiscoverSearchView.swift",
+      "erfc(outside / 2.squareRoot())",
+      "erfc(Double(outside) / Double(2).squareRoot())",
+      "DiscoverSearchView erfc Double")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
