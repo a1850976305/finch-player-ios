@@ -137,7 +137,13 @@ private struct WebHomeWebView: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        view.load(URLRequest(url: url))
+        if url.host()?.lowercased() == "files.yingxia.invalid", let html = ImportedFiles.localHTML(at: url) {
+            // A locally imported .html page: WKWebView cannot fetch the
+            // reserved host, so render the copied file itself.
+            view.loadHTMLString(html, baseURL: url)
+        } else {
+            view.load(URLRequest(url: url))
+        }
         bridge.attach(webView: view)
         return view
     }
