@@ -8,7 +8,10 @@ import TVCore
 /// deleted source disappears from every list and an edited source runs under
 /// its new address and display name, and both survive a subscription refresh
 /// (a refetch rebuilds the merge and the records re-apply).
-final class FinchSourceOverrides {
+/// Read and written only from the main actor (Store and the management UI),
+/// so the shared instance is safe to share; Swift 6 still needs this said
+/// out loud because the class itself is not Sendable.
+final class FinchSourceOverrides: @unchecked Sendable {
     static let shared = FinchSourceOverrides()
 
     struct Edit: Codable {
