@@ -19,37 +19,58 @@ final class WebHomeGateway {
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let server = try NWListener(using: parameters)
         self.listener = server
-        server.newConnectionHandler = { [weak self] connection in
+        // The connection handler needs no gateway state: it only starts the
+        // connection and hands it to the static receiver. Capturing self
+        // here would fail Swift 6 Sendable checking (WebHomeGateway is not
+        // Sendable) for no benefit.
+        server.newConnectionHandler = { connection in
             connection.start(queue: .global(qos: .userInitiated))
             Self.receive(connection, buffer: Data())
-            _ = self
         }
         let queue = DispatchQueue(label: "finch.webhome.gateway")
-        return try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
+        let portValue = try await withCheckedThrowingContinuation { continuation in
+            // stateUpdateHandler runs on a @Sendable closure, so the
+            // resume-once flag must live in a lock-guarded Sendable box,
+            // not a captured var, and self.port is set after the await
+            // returns, outside the closure.
+            let guardBox = ResumeGuard()
             server.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    if !resumed, let port = server.port {
-                        resumed = true
-                        self.port = Int(port.rawValue)
-                        continuation.resume(returning: Int(port.rawValue))
+                    if let port = server.port {
+                        guardBox.resumeOnce { continuation.resume(returning: Int(port.rawValue)) }
                     }
                 case .failed(let error):
-                    if !resumed { resumed = true; continuation.resume(throwing: error) }
+                    guardBox.resumeOnce { continuation.resume(throwing: error) }
                 case .cancelled:
-                    if !resumed { resumed = true; continuation.resume(throwing: CancellationError()) }
+                    guardBox.resumeOnce { continuation.resume(throwing: CancellationError()) }
                 default: break
                 }
             }
             server.start(queue: queue)
         }
+        self.port = portValue
+        return portValue
     }
 
     func stop() {
         listener?.cancel()
         listener = nil
         port = 0
+    }
+
+    /// Lock-guarded resume-once flag for @Sendable closures. All state is
+    /// behind the lock, so the box itself is safe to share across threads.
+    private final class ResumeGuard: @unchecked Sendable {
+        private let lock = NSLock()
+        private var resumed = false
+        func resumeOnce(_ action: () -> Void) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !resumed else { return }
+            resumed = true
+            action()
+        }
     }
 
     /// The synchronous fm.res() string for a target URL. Built in JS too, but
