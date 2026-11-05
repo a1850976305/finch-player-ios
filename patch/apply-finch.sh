@@ -459,6 +459,10 @@ patch("App/SitesView.swift",
       "SitesView card delete menu")
 
 # --- Settings (iOS Add Subscription sheet): multi-file pick + folder pick. ---
+# SwiftUI rule learned 2026-11-05: two .fileImporter modifiers on ONE view
+# shadow each other and neither presents (that is why Add from File did
+# nothing). Each importer lives on its own view: file on the sheet root,
+# folder on its Section.
 patch("App/SettingsView.swift",
       """private struct AddSubscriptionSheet: View {
     @Environment(Store.self) private var store
@@ -497,6 +501,13 @@ patch("App/SettingsView.swift",
                     }
                     .disabled(store.importing)
                 } footer: { Text(L10n.text("Every JSON, Python (.py) and JavaScript (.js) file in the folder is imported.")) }
+                .fileImporter(isPresented: $choosesFolder, allowedContentTypes: [.folder]) { result in
+                    guard case .success(let folder) = result else { return }
+                    Task {
+                        await store.importSubscriptionFolder(folder)
+                        if store.importError == nil { dismiss() }
+                    }
+                }
 """,
       "Settings folder button")
 patch("App/SettingsView.swift",
@@ -512,13 +523,6 @@ patch("App/SettingsView.swift",
             guard case .success(let files) = result else { return }
             Task {
                 for file in files { await store.importSubscriptionFile(file) }
-                if store.importError == nil { dismiss() }
-            }
-        }
-        .fileImporter(isPresented: $choosesFolder, allowedContentTypes: [.folder]) { result in
-            guard case .success(let folder) = result else { return }
-            Task {
-                await store.importSubscriptionFolder(folder)
                 if store.importError == nil { dismiss() }
             }
         }
