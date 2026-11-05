@@ -240,5 +240,45 @@ patch("App/DiscoverSearchView.swift",
       "DiscoverSearchView erfc Double")
 PYEOF
 
+
+# WebHome step 1 (2026-11-05): WKWebView + fm bridge for homePage sites.
+# New files live in the starter repo's webhome/ directory; the CI layout is
+# starter-root/webhome/ next to starter-root/yingxia/, so from inside the
+# upstream checkout they are at ../webhome/. The App target's SharedApp
+# template globs the whole App/ directory, so dropped-in files need no
+# project.yml change.
+if [ -d ../webhome ]; then
+  cp ../webhome/WebHomeSite.swift ../webhome/WebHomeGateway.swift ../webhome/WebHomeView.swift App/
+else
+  echo "webhome/ directory not found next to the upstream checkout; refusing to patch blindly" >&2
+  exit 1
+fi
+
+# SiteView hook: a site declaring homePage renders the WebHome view instead
+# of the native recommendation page. All other sites keep the exact old path
+# (the else-if chain preserves the canLoad / native branches untouched).
+python3 - <<'PYEOF'
+import pathlib, sys
+p = pathlib.Path("App/SitesView.swift")
+text = p.read_text()
+old = """    var body: some View {
+        Group {
+            if !canLoad {
+                ContentUnavailableView {
+"""
+new = """    var body: some View {
+        Group {
+            if site.webHomePage {
+                WebHomeView(site: site, origin: origin)
+            } else if !canLoad {
+                ContentUnavailableView {
+"""
+if old not in text:
+    print("SitesView SiteView body pattern not found; refusing to patch blindly", file=sys.stderr)
+    sys.exit(1)
+p.write_text(text.replace(old, new, 1))
+print("SitesView: WebHome hook added")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
