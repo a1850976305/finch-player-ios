@@ -280,5 +280,129 @@ p.write_text(text.replace(old, new, 1))
 print("SitesView: WebHome hook added")
 PYEOF
 
+
+# Infinite scroll (2026-11-05, user request): category/search lists load the
+# next page when the last card appears, appending instead of replacing.
+# The source still only supplies page/pageCount; the UI no longer uses the
+# arrow pager. The end is an empty next page, not pageCount alone, because
+# some sources report pageCount loosely.
+python3 - <<'PYEOF'
+import pathlib, re, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label} pattern not found; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(label)
+
+# --- CatalogBrowser: append-only next page ---
+patch("Sources/TVCore/CatalogBrowser.swift",
+      "    public private(set) var loaded = false\n",
+      "    public private(set) var loaded = false\n    public private(set) var loadingMore = false\n    public private(set) var reachedEnd = false\n",
+      "CatalogBrowser loadingMore/reachedEnd")
+patch("Sources/TVCore/CatalogBrowser.swift",
+      "        busy = !refreshing; loaded = false; error = nil\n",
+      "        busy = !refreshing; loaded = false; error = nil; reachedEnd = false\n",
+      "CatalogBrowser reset reachedEnd on new load")
+patch("Sources/TVCore/CatalogBrowser.swift",
+      """    public func load(_ request: Request, client: CatalogClient) async {
+        await load(request, context: client.reportContext) { request in
+            switch request {
+            case .home: return try await client.home()
+            case let .list(category, query, page, filters): return try await client.list(category: category, query: query, page: page, filters: filters)
+            }
+        }
+    }
+""",
+      """    public func load(_ request: Request, client: CatalogClient) async {
+        await load(request, context: client.reportContext) { request in
+            switch request {
+            case .home: return try await client.home()
+            case let .list(category, query, page, filters): return try await client.list(category: category, query: query, page: page, filters: filters)
+            }
+        }
+    }
+
+    /// Append the next page of the current category/search list, if any.
+    /// Home has no next page. The end is reached when the next page comes
+    /// back empty (or repeats the same items) -- some sources report
+    /// pageCount loosely, so pageCount alone must not decide the end, and a
+    /// failed next page must not wipe the list or block a retry.
+    public func loadMore(client: CatalogClient) async {
+        guard case let .list(category, query, page, filters) = request else { return }
+        guard !busy, !loadingMore, !reachedEnd, !videos.isEmpty else { return }
+        guard page < pageCount else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        let current = generation
+        do {
+            let result = try await client.list(category: category, query: query, page: page + 1, filters: filters)
+            guard generation == current, !Task.isCancelled else { return }
+            if result.videos.isEmpty {
+                reachedEnd = true
+                return
+            }
+            let fresh = result.videos.filter { video in !videos.contains(where: { $0.id == video.id }) }
+            if fresh.isEmpty {
+                reachedEnd = true
+                return
+            }
+            videos.append(contentsOf: fresh)
+            page = page + 1
+            pageCount = max(result.pageCount, page)
+        } catch {
+            Diagnostics.shared.failure("catalog", "list \\(client.reportContext)", error)
+        }
+    }
+""",
+      "CatalogBrowser loadMore")
+
+# --- SitesView: trigger on the last card, footer spinner, drop the pager ---
+patch("App/SitesView.swift",
+      """                                if isIndex {
+                                    Button { store.searchVideos(video.name) } label: { PosterCard(video: video) }.cardButton()
+                                } else {
+                                    RouteLink { CatalogDestination(video: video, client: client) } label: { PosterCard(video: video) }.cardButton()
+                                }
+""",
+      """                                if isIndex {
+                                    Button { store.searchVideos(video.name) } label: { PosterCard(video: video) }.cardButton()
+                                        .onAppear { if video.id == browser.videos.last?.id { startRequest { await browser.loadMore(client: client) } } }
+                                } else {
+                                    RouteLink { CatalogDestination(video: video, client: client) } label: { PosterCard(video: video) }.cardButton()
+                                        .onAppear { if video.id == browser.videos.last?.id { startRequest { await browser.loadMore(client: client) } } }
+                                }
+""",
+      "SitesView last-card loadMore trigger")
+patch("App/SitesView.swift",
+      """                        .opacity(browser.busy && !browser.videos.isEmpty ? 0.55 : 1).animation(.smooth, value: browser.busy)
+""",
+      """                        .opacity(browser.busy && !browser.videos.isEmpty ? 0.55 : 1).animation(.smooth, value: browser.busy)
+                        if browser.loadingMore {
+                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12)
+                        }
+""",
+      "SitesView loadMore footer")
+patch("App/SitesView.swift",
+      "                .safeAreaInset(edge: .bottom) { if browser.pageCount > 1 { pager } }\n",
+      "",
+      "SitesView remove pager inset")
+p = pathlib.Path("App/SitesView.swift")
+text = p.read_text()
+text2, n1 = re.subn(r"    private var pager: some View \{.*?    private func home\(\) async", "    private func home() async", text, count=1, flags=re.S)
+if n1 != 1:
+    print("SitesView pager block pattern not found; refusing to patch blindly", file=sys.stderr)
+    sys.exit(1)
+text2, n2 = re.subn(r"    private func load\(page next: Int\) async \{.*?\n    \}\n\}", "}", text2, count=1, flags=re.S)
+if n2 != 1:
+    print("SitesView load(page:) pattern not found; refusing to patch blindly", file=sys.stderr)
+    sys.exit(1)
+p.write_text(text2)
+print("SitesView pager + load(page:) removed")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
