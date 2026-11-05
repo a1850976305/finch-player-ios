@@ -332,14 +332,14 @@ patch("Sources/TVCore/CatalogBrowser.swift",
     /// pageCount loosely, so pageCount alone must not decide the end, and a
     /// failed next page must not wipe the list or block a retry.
     public func loadMore(client: CatalogClient) async {
-        guard case let .list(category, query, page, filters) = request else { return }
+        guard case let .list(category, query, currentPage, filters) = request else { return }
         guard !busy, !loadingMore, !reachedEnd, !videos.isEmpty else { return }
-        guard page < pageCount else { return }
+        guard currentPage < pageCount else { return }
         loadingMore = true
         defer { loadingMore = false }
         let current = generation
         do {
-            let result = try await client.list(category: category, query: query, page: page + 1, filters: filters)
+            let result = try await client.list(category: category, query: query, page: currentPage + 1, filters: filters)
             guard generation == current, !Task.isCancelled else { return }
             if result.videos.isEmpty {
                 reachedEnd = true
@@ -351,8 +351,8 @@ patch("Sources/TVCore/CatalogBrowser.swift",
                 return
             }
             videos.append(contentsOf: fresh)
-            page = page + 1
-            pageCount = max(result.pageCount, page)
+            self.page = currentPage + 1
+            pageCount = max(result.pageCount, self.page)
         } catch {
             Diagnostics.shared.failure("catalog", "list \\(client.reportContext)", error)
         }
