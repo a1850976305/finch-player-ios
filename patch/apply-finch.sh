@@ -517,16 +517,22 @@ patch("App/Store.swift",
     func importSubscriptionFolder(_ folder: URL) async {
         let scoped = folder.startAccessingSecurityScopedResource()
         defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
-        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
-            importError = L10n.text("Could not read the folder.")
-            return
-        }
         var files: [URL] = []
-        for case let file as URL in enumerator where ["json", "py", "js"].contains(file.pathExtension.lowercased()) {
-            files.append(file)
-        }
+        collectImportFiles(in: folder, into: &files)
         files.sort { $0.path < $1.path }
         for file in files { await importSubscriptionFile(file) }
+    }
+    /// Folder walk without DirectoryEnumerator: its iterator is unavailable
+    /// from async contexts under Swift 6. contentsOfDirectory is recursive
+    /// here so nested folders import too.
+    private func collectImportFiles(in folder: URL, into files: inout [URL]) {
+        guard let items = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return }
+        for item in items {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: item.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue { collectImportFiles(in: item, into: &files) }
+            else if ["json", "py", "js"].contains(item.pathExtension.lowercased()) { files.append(item) }
+        }
     }
     /// Fetches every enabled subscription again; one that fails keeps its last good copy.
 """,
