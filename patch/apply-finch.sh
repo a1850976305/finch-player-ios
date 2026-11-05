@@ -526,5 +526,76 @@ patch("App/SettingsView.swift",
       "Settings multi-file + folder importers")
 PYEOF
 
+
+# Local WebHome pages (2026-11-05, user report): a .html file on its own is
+# not a subscription, so the file picker rejected it. Now .html is offered,
+# and importing one wraps the copied page in a one-site subscription whose
+# homePage is the page itself; the WebView renders the copied file because
+# WKWebView cannot fetch the importer's reserved host.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label} pattern not found; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(label)
+
+patch("Sources/TVCore/SingleSpider.swift",
+      "    public static func isImported(_ address: String) -> Bool { URL(string: address)?.host()?.lowercased() == host }\n",
+      """    public static func isImported(_ address: String) -> Bool { URL(string: address)?.host()?.lowercased() == host }
+
+    /// The copied file behind a reserved-host address, as text, for views
+    /// that must render it themselves (a WebHome page in a WKWebView cannot
+    /// fetch the reserved host).
+    public static func localHTML(at url: URL) -> String? {
+        guard let data = try? data(at: url) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+""",
+      "ImportedFiles localHTML")
+patch("App/SettingsView.swift",
+      "    static let types: [UTType] = [.json, .pythonScript, .javaScript]\n",
+      "    static let types: [UTType] = [.json, .pythonScript, .javaScript, .html]\n",
+      "SubscriptionFile html type")
+patch("App/SettingsView.swift",
+      "A TVBox JSON subscription, or one Python (.py) or JavaScript (.js) spider. Pick several files at once.",
+      "A TVBox JSON subscription, one Python (.py) or JavaScript (.js) spider, or a WebHome (.html) page. Pick several files at once.",
+      "Settings html footer")
+patch("App/Store.swift",
+      """        let address = url.absoluteString, known = subscriptions.contains { $0.address == address }
+        await importSubscription(address: address)
+""",
+      """        let address = url.absoluteString, known = subscriptions.contains { $0.address == address }
+        if url.pathExtension.lowercased() == "html" {
+            // A WebHome page on its own is not a subscription: wrap it in one
+            // whose only site renders the copied page as its homePage.
+            let base = url.deletingPathExtension().lastPathComponent
+            let key = "webhome-" + base.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "-" }
+            do {
+                let doc: [String: Any] = ["sites": [["key": key, "name": "Finch·\\(base)", "type": 3, "api": address, "homePage": address]]]
+                let data = try JSONSerialization.data(withJSONObject: doc)
+                let value = try Subscription.parse(data, origin: url)
+                let entry = SubscriptionEntry(address: address)
+                if let index = subscriptions.firstIndex(where: { $0.address == entry.address }) {
+                    subscriptions[index].enabled = true
+                } else { subscriptions.append(entry) }
+                keep(value, for: entry)
+                notice = L10n.text("Imported sources: %lld · Live playlists: %lld", value.sites.count, value.lives.count)
+                saveSubscriptionList()
+                rebuildSubscription()
+            } catch {
+                importError = L10n.text("Import failed: %@", error.localizedDescription)
+            }
+            return
+        }
+        await importSubscription(address: address)
+""",
+      "Store local html import")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
