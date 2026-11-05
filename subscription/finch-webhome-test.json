@@ -4,8 +4,8 @@
       "key": "webhome-nostr",
       "name": "Finch·WebHome测试nostr",
       "type": 3,
-      "api": "https://raw.githack.com/webhtv/webhtv/main/webhome-devkit/examples/homepages/nostr.html",
-      "homePage": "https://raw.githack.com/webhtv/webhtv/main/webhome-devkit/examples/homepages/nostr.html",
+      "api": "https://a1850976305.github.io/finch-player-ios/nostr.html",
+      "homePage": "https://a1850976305.github.io/finch-player-ios/nostr.html",
       "searchable": 0,
       "changeable": 0
     }
