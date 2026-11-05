@@ -404,5 +404,247 @@ p.write_text(text2)
 print("SitesView pager + load(page:) removed")
 PYEOF
 
+
+# Source management (2026-11-05, user request): WebHome sites are browsable,
+# per-source delete/edit, multi-file and folder import.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label} pattern not found; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(label)
+
+# --- Finch source files into App/ ---
+import shutil, os
+for name in ("FinchSourceOverrides.swift", "FinchSourceManagement.swift"):
+    src = pathlib.Path("../finch") / name
+    if not src.exists():
+        print(f"finch/{name} missing; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    shutil.copy(src, pathlib.Path("App") / name)
+print("Finch source management files copied")
+
+# --- WebHome sites are browsable: a .html api classifies as JAR and iOS
+# filters JAR sites without a spider out of every list, which is why the
+# test subscription imported (1 source) but showed no source. A homePage
+# site browses through its web page, not its api runtime. ---
+patch("Sources/TVCore/Discovery.swift",
+      """    public func canBrowse(jarURL: URL?) -> Bool {
+        if isCloudFiles { return true }
+""",
+      """    public func canBrowse(jarURL: URL?) -> Bool {
+        // A WebHome site browses through its web page, not its api runtime.
+        for key in ["homePage", "home_page", "webHome", "web_home"] {
+            if let text = raw[key]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { return true }
+        }
+        if isCloudFiles { return true }
+""",
+      "Discovery WebHome browsable")
+
+# --- TVCore helper: apply Finch per-source deletes/edits to a merged
+# subscription. Construction must stay in TVCore: Site/Subscription
+# memberwise inits are not public to the App target. ---
+p = pathlib.Path("Sources/TVCore/SubscriptionMerge.swift")
+text = p.read_text()
+if "FinchSiteEdit" not in text:
+    p.write_text(text + """
+/// A Finch per-source edit: a new address, and a display remark (empty
+/// remark keeps the original name). Defined here so the App target can
+/// construct it; applied by Subscription.applyingFinchSourceChanges.
+public struct FinchSiteEdit: Sendable {
+    public let api: String
+    public let remark: String
+    public init(api: String, remark: String) { self.api = api; self.remark = remark }
+}
+
+extension Subscription {
+    /// Drops Finch-deleted sources and rewrites Finch-edited ones (address
+    /// and display name), keeping each site's provenance. Deleted keys and
+    /// edit keys are "<subscription origin>|<sourceKey>".
+    public func applyingFinchSourceChanges(deleted: Set<String>, edits: [String: FinchSiteEdit]) -> Subscription {
+        var sites: [Site] = []
+        for site in self.sites {
+            let key = "\\(site.origin(or: origin).absoluteString)|\\(site.sourceKey)"
+            guard !deleted.contains(key) else { continue }
+            if let edit = edits[key] {
+                var raw = site.raw
+                let newName = edit.remark.isEmpty ? site.name : edit.remark
+                let newApi = edit.api.isEmpty ? site.api : edit.api
+                raw["name"] = .string(newName)
+                raw["api"] = .string(newApi)
+                var newSite = Site(key: site.key, name: newName, type: site.type, api: newApi, raw: raw, detectedRuntime: site.detectedRuntime)
+                newSite.provenance = site.provenance
+                sites.append(newSite)
+            } else {
+                sites.append(site)
+            }
+        }
+        return Subscription(origin: origin, importedAt: importedAt, sites: sites, lives: lives, raw: raw)
+    }
+}
+""")
+    print("SubscriptionMerge Finch source changes")
+else:
+    print("SubscriptionMerge Finch source changes (already present)")
+
+# --- Store: apply Finch changes on every rebuild, reload without refetch,
+# and import a whole folder. ---
+patch("App/Store.swift",
+      "        subscription = Subscription.merge(subscriptions.filter(\\.enabled).compactMap { documents[$0.address] })?.withCloudSources(extrasUnlocked ? cloudDocument : nil)\n",
+      "        subscription = Subscription.merge(subscriptions.filter(\\.enabled).compactMap { documents[$0.address] })?.applyingFinchSourceChanges(deleted: FinchSourceOverrides.shared.deletedKeys, edits: FinchSourceOverrides.shared.tvCoreEdits).withCloudSources(extrasUnlocked ? cloudDocument : nil)\n",
+      "Store apply Finch source changes")
+patch("App/Store.swift",
+      """    }
+    /// Fetches Yingxia's own subscription while a subscription works: at once when there is no copy, else
+""",
+      """    }
+    /// Re-applies the viewer's per-source deletes/edits without refetching.
+    func reloadAfterFinchSourceChange() { rebuildSubscription() }
+    /// Fetches Yingxia's own subscription while a subscription works: at once when there is no copy, else
+""",
+      "Store reload after source change")
+patch("App/Store.swift",
+      """    /// Fetches every enabled subscription again; one that fails keeps its last good copy.
+""",
+      """    /// Imports every supported file in a folder the viewer picked: JSON
+    /// subscriptions and .py / .js spiders, in filename order. Files that
+    /// add nothing are not kept, exactly like single-file imports.
+    func importSubscriptionFolder(_ folder: URL) async {
+        let scoped = folder.startAccessingSecurityScopedResource()
+        defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            importError = L10n.text("Could not read the folder.")
+            return
+        }
+        var files: [URL] = []
+        for case let file as URL in enumerator where ["json", "py", "js"].contains(file.pathExtension.lowercased()) {
+            files.append(file)
+        }
+        files.sort { $0.path < $1.path }
+        for file in files { await importSubscriptionFile(file) }
+    }
+    /// Fetches every enabled subscription again; one that fails keeps its last good copy.
+""",
+      "Store folder import")
+
+# --- SitesView: Manage button + sheet, and Delete in the card menu. ---
+patch("App/SitesView.swift",
+      "    @State private var choosingHidden = false\n",
+      "    @State private var choosingHidden = false\n    @State private var managingSources = false\n",
+      "SitesView managing state")
+patch("App/SitesView.swift",
+      """                .sheet(isPresented: $choosingHidden) { HiddenSourcesEditor() }
+""",
+      """                .sheet(isPresented: $choosingHidden) { HiddenSourcesEditor() }
+                .sheet(isPresented: $managingSources) { FinchSourceManagementView() }
+""",
+      "SitesView management sheet")
+patch("App/SitesView.swift",
+      """        .modifier(SitesTitle(picking: pick != nil))
+        .task(id: store.section) {
+""",
+      """        .modifier(SitesTitle(picking: pick != nil))
+        .toolbar {
+            if pick == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("管理") { managingSources = true }
+                }
+            }
+        }
+        .task(id: store.section) {
+""",
+      "SitesView manage toolbar")
+patch("App/SitesView.swift",
+      """                                            .contextMenu {
+                                                PinSourceButton(site: site, origin: config.origin)
+                                                HideSourceButton(site: site, origin: config.origin)
+                                                if store.sourceOrder.enabled { MoveSourceButtons(site: site, sites: sites) }
+                                            }
+""",
+      """                                            .contextMenu {
+                                                PinSourceButton(site: site, origin: config.origin)
+                                                HideSourceButton(site: site, origin: config.origin)
+                                                if store.sourceOrder.enabled { MoveSourceButtons(site: site, sites: sites) }
+                                                Button(role: .destructive) {
+                                                    FinchSourceOverrides.shared.delete(site: site, origin: config.origin)
+                                                    store.reloadAfterFinchSourceChange()
+                                                } label: { Label("删除源", systemImage: "trash") }
+                                            }
+""",
+      "SitesView card delete menu")
+
+# --- Settings (iOS Add Subscription sheet): multi-file pick + folder pick. ---
+patch("App/SettingsView.swift",
+      """private struct AddSubscriptionSheet: View {
+    @Environment(Store.self) private var store
+    @Environment(\\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+    @State private var choosesFile = false
+""",
+      """private struct AddSubscriptionSheet: View {
+    @Environment(Store.self) private var store
+    @Environment(\\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+    @State private var choosesFile = false
+    @State private var choosesFolder = false
+""",
+      "Settings folder state")
+patch("App/SettingsView.swift",
+      """                Section {
+                    Button { choosesFile = true } label: {
+                        FormLabel(symbol: "doc.badge.plus", tint: .orange, title: L10n.text("Add from File…"))
+                            .foregroundStyle(.primary)
+                    }
+                    .disabled(store.importing)
+                } footer: { Text(L10n.text("A TVBox JSON subscription, or one Python (.py) or JavaScript (.js) spider.")) }
+""",
+      """                Section {
+                    Button { choosesFile = true } label: {
+                        FormLabel(symbol: "doc.badge.plus", tint: .orange, title: L10n.text("Add from File…"))
+                            .foregroundStyle(.primary)
+                    }
+                    .disabled(store.importing)
+                } footer: { Text(L10n.text("A TVBox JSON subscription, or one Python (.py) or JavaScript (.js) spider. Pick several files at once.")) }
+                Section {
+                    Button { choosesFolder = true } label: {
+                        FormLabel(symbol: "folder.badge.plus", tint: .orange, title: L10n.text("Add from Folder…"))
+                            .foregroundStyle(.primary)
+                    }
+                    .disabled(store.importing)
+                } footer: { Text(L10n.text("Every JSON, Python (.py) and JavaScript (.js) file in the folder is imported.")) }
+""",
+      "Settings folder button")
+patch("App/SettingsView.swift",
+      """        .fileImporter(isPresented: $choosesFile, allowedContentTypes: SubscriptionFile.types) { result in
+            guard case .success(let file) = result else { return }
+            Task {
+                await store.importSubscriptionFile(file)
+                if store.importError == nil { dismiss() }
+            }
+        }
+""",
+      """        .fileImporter(isPresented: $choosesFile, allowedContentTypes: SubscriptionFile.types, allowsMultipleSelection: true) { result in
+            guard case .success(let files) = result else { return }
+            Task {
+                for file in files { await store.importSubscriptionFile(file) }
+                if store.importError == nil { dismiss() }
+            }
+        }
+        .fileImporter(isPresented: $choosesFolder, allowedContentTypes: [.folder]) { result in
+            guard case .success(let folder) = result else { return }
+            Task {
+                await store.importSubscriptionFolder(folder)
+                if store.importError == nil { dismiss() }
+            }
+        }
+""",
+      "Settings multi-file + folder importers")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
