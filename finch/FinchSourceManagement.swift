@@ -561,6 +561,10 @@ private struct FinchRowTagModifier: ViewModifier {
 /// What a subscription row shows as its secondary line: refresh failure,
 /// switched off, not loaded yet, or its source count. Same wording as the
 /// old Settings row, minus the L10n lookup (this page is Chinese-first).
+/// @MainActor: Store is a @MainActor @Observable class, so a global helper
+/// touching its properties must be isolated too (build 42208472670 failed
+/// here with exit 65 before this was added).
+@MainActor
 private func finchSubscriptionStatus(_ entry: SubscriptionEntry, store: Store) -> String {
     if store.subscriptionErrors[entry.address] != nil { return "刷新失败" }
     if !entry.enabled { return "已停用" }
