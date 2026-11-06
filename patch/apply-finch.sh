@@ -579,9 +579,20 @@ patch("App/SitesView.swift",
 """,
       "SitesView type sub-sections")
 patch("App/SitesView.swift",
+      "                            groupHeader(group)\n",
+      "                            groupHeader(group, origin: config.origin)\n",
+      "SitesView group header origin")
+patch("App/SitesView.swift",
+      "    private func groupHeader(_ group: SourceGroup) -> some View {\n",
+      "    private func groupHeader(_ group: SourceGroup, origin: URL) -> some View {\n",
+      "SitesView group header signature")
+# groupHeader is a separate function, so the `config` local from body is
+# NOT in scope there (Xcode 26.3, 2026-11-06: "cannot find 'config' in
+# scope"). The subscription origin is passed in from the call site.
+patch("App/SitesView.swift",
       """                Text(L10n.text(group.title)).font(.headline).lineLimit(1)
 """,
-      """                Text((FinchSourceGrouping.isLocalGroup(group, fallback: config.origin) ? "本地 · " : "") + L10n.text(group.title)).font(.headline).lineLimit(1)
+      """                Text((FinchSourceGrouping.isLocalGroup(group, fallback: origin) ? "本地 · " : "") + L10n.text(group.title)).font(.headline).lineLimit(1)
 """,
       "SitesView local group badge")
 patch("App/SitesView.swift",
