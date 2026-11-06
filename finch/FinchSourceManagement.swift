@@ -31,9 +31,14 @@ struct FinchSourceManagementView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     let filter: FinchRuntimeGroup?
+    /// False when the view sits inside a tab's own NavigationStack
+    /// (RouteStack): nesting a second NavigationStack would render a
+    /// second navigation bar. True for the sheet, which has no stack.
+    let embedInNavigationStack: Bool
 
-    init(filter: FinchRuntimeGroup? = nil) {
+    init(filter: FinchRuntimeGroup? = nil, embedInNavigationStack: Bool = true) {
         self.filter = filter
+        self.embedInNavigationStack = embedInNavigationStack
     }
 
     @State private var editingSite: Site?
@@ -143,19 +148,27 @@ struct FinchSourceManagementView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            if store.subscription != nil {
-                // AnyView here is deliberate: the management list's full
-                // modifier chain (two confirmation dialogs + sheet) made the
-                // Swift 6.2 type checker time out on `body` (Xcode 26.3,
-                // 2026-11-06, "unable to type-check this expression in
-                // reasonable time"). Erasing the list's type at this seam
-                // keeps the checker's budget small; the rows inside the
-                // List are unaffected.
-                AnyView(managementList)
-            } else {
-                AnyView(emptyStateWithImport)
-            }
+        if embedInNavigationStack {
+            NavigationStack { managementContent }
+        } else {
+            managementContent
+        }
+    }
+
+    /// The page without its own NavigationStack, so the tab's RouteStack
+    /// can own the bar (see `embedInNavigationStack`).
+    private var managementContent: some View {
+        if store.subscription != nil {
+            // AnyView here is deliberate: the management list's full
+            // modifier chain (two confirmation dialogs + sheet) made the
+            // Swift 6.2 type checker time out on `body` (Xcode 26.3,
+            // 2026-11-06, "unable to type-check this expression in
+            // reasonable time"). Erasing the list's type at this seam
+            // keeps the checker's budget small; the rows inside the
+            // List are unaffected.
+            AnyView(managementList)
+        } else {
+            AnyView(emptyStateWithImport)
         }
     }
 
@@ -443,7 +456,9 @@ struct FinchSourceManagementView: View {
                     showingSiteDeleteConfirm = true
                 }
                 .disabled(selection.isEmpty)
-            } else {
+            } else if embedInNavigationStack {
+                // The tab has nothing to dismiss; there the button would
+                // sit dead, so it only exists for the sheet.
                 Button("完成") { dismiss() }
             }
         }
