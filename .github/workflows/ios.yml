@@ -79,6 +79,8 @@ jobs:
           fi
           echo "NODE_BIN=$NODE_BIN NODE_LICENSE=$NODE_LICENSE"
           Scripts/build-script-host.sh
+          echo "=== fetch-node-mobile (CatPaw) ==="
+          Scripts/fetch-node-mobile.sh
           echo "=== build-python-host ==="
           Scripts/build-python-host.sh
           echo "=== package-apple-runtime ios ==="
