@@ -48,6 +48,7 @@ struct FinchSourceManagementView: View {
     @State private var pendingSubscriptionDelete: SubscriptionEntry?
     @State private var showingSubscriptionDeleteConfirm = false
     @State private var choosesFile = false
+    @State private var choosesFolder = false
     @State private var fileImportResult: String?
 
     private struct Row: Identifiable {
@@ -153,9 +154,26 @@ struct FinchSourceManagementView: View {
                 // List are unaffected.
                 AnyView(managementList)
             } else {
-                ContentUnavailableView("还没有源", systemImage: "square.grid.2x2", description: Text("先在设置里添加一个订阅。"))
+                AnyView(emptyStateWithImport)
             }
         }
+    }
+
+    /// Shown when there is no subscription at all: the import chooser is
+    /// still reachable here, so the empty state points at it instead of at
+    /// Settings (subscription import moved out of Settings 2026-11-06).
+    /// Its own small expression, like managementList, for the type-check
+    /// budget (see `body`).
+    private var emptyStateWithImport: some View {
+        List {
+            importSection
+            Section {
+                Text("还没有源，点上面“添加资源”导入一个源。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("源管理")
     }
 
     /// The management list, split out of `body`: the single giant body
@@ -234,6 +252,18 @@ struct FinchSourceManagementView: View {
                         guard case .success(let files) = result else { return }
                         Task { await importFiles(files) }
                     }
+                } else if kind == .localFolder {
+                    // Folder import moved from Settings 2026-11-06. Its
+                    // .fileImporter lives on this row's own Button, never
+                    // stacked with the file importer's Button above.
+                    Button { choosesFolder = true } label: {
+                        importRow(kind: kind)
+                    }
+                    .buttonStyle(.plain)
+                    .fileImporter(isPresented: $choosesFolder, allowedContentTypes: [.folder]) { result in
+                        guard case .success(let folder) = result else { return }
+                        Task { await importFolder(folder) }
+                    }
                 } else if kind == .rexSubscription {
                     NavigationLink(destination: FinchFwdPickerView()) {
                         importRow(kind: kind)
@@ -278,6 +308,23 @@ struct FinchSourceManagementView: View {
     private func importFiles(_ files: [URL]) async {
         let before = Set(store.subscriptions.map(\.address))
         for file in files { await store.importSubscriptionFile(file) }
+        if let error = store.importError {
+            fileImportResult = error
+            return
+        }
+        let added = store.subscriptions.filter { !before.contains($0.address) }
+            .compactMap { store.documents[$0.address]?.sites }.flatMap { $0 }
+        fileImportResult = added.isEmpty
+            ? (store.notice ?? "已导入，没有新增源。")
+            : FinchImportSummary.text(for: added)
+    }
+
+    /// Folder import: every .json/.py/.js file in the folder goes through
+    /// the same import path as a picked file. Same result summary as
+    /// importFiles, so the row below the chooser says what landed where.
+    private func importFolder(_ folder: URL) async {
+        let before = Set(store.subscriptions.map(\.address))
+        await store.importSubscriptionFolder(folder)
         if let error = store.importError {
             fileImportResult = error
             return
