@@ -190,8 +190,12 @@ struct FinchSourceManagementView: View {
         .tint(.orange)
     }
 
+    // NOTE: SwiftUI has no Section("title") { } footer: { } initializer —
+    // the only footer-taking form is Section { } header: { } footer: { }.
+    // The title form with a footer failed the build (run 42155633580:
+    // "generic parameter 'Content' could not be inferred" at this Section).
     private var subscriptionSection: some View {
-        Section("订阅") {
+        Section {
             ForEach(store.subscriptions) { entry in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -205,6 +209,8 @@ struct FinchSourceManagementView: View {
                     } label: { Label("删除", systemImage: "trash") }
                 }
             }
+        } header: {
+            Text("订阅")
         } footer: {
             Text("删除整个订阅会删掉它包含的全部源。订阅里的单个源只能删除本地源，远程源请隐藏或删除整个订阅。")
         }
