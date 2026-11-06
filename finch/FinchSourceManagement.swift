@@ -50,8 +50,6 @@ struct FinchSourceManagementView: View {
     @State private var selection = Set<String>()
     @State private var pendingSiteDelete: [FinchSiteDelete] = []
     @State private var showingSiteDeleteConfirm = false
-    @State private var pendingSubscriptionDelete: SubscriptionEntry?
-    @State private var showingSubscriptionDeleteConfirm = false
     @State private var choosesFile = false
     @State private var choosesFolder = false
     @State private var fileImportResult: String?
@@ -202,7 +200,7 @@ struct FinchSourceManagementView: View {
                 runtimeGroupsSection
             }
             sourceSections
-            if filter == nil {
+            if filter == nil && !editMode.isEditing {
                 subscriptionSection
             }
         }
@@ -213,11 +211,6 @@ struct FinchSourceManagementView: View {
             siteDeleteDialogActions
         } message: {
             Text("将彻底删除 \(deleteNames)，数据也会一并清除，无法恢复。")
-        }
-        .confirmationDialog("删除订阅", isPresented: $showingSubscriptionDeleteConfirm) {
-            subscriptionDeleteDialogActions
-        } message: {
-            Text("将删除整个订阅及其全部源，数据也会一并清除，无法恢复。")
         }
         .sheet(item: $editingSite) { site in
             editSheet(site: site)
@@ -235,15 +228,6 @@ struct FinchSourceManagementView: View {
             editMode = .inactive
         }
         Button("取消", role: .cancel) { pendingSiteDelete = [] }
-    }
-
-    @ViewBuilder
-    private var subscriptionDeleteDialogActions: some View {
-        Button("删除", role: .destructive) {
-            if let entry = pendingSubscriptionDelete { store.removeSubscription(entry) }
-            pendingSubscriptionDelete = nil
-        }
-        Button("取消", role: .cancel) { pendingSubscriptionDelete = nil }
     }
 
     /// Guided import chooser: one row per source kind — icon, title, and a
@@ -407,25 +391,48 @@ struct FinchSourceManagementView: View {
     // the only footer-taking form is Section { } header: { } footer: { }.
     // The title form with a footer failed the build (run 42155633580:
     // "generic parameter 'Content' could not be inferred" at this Section).
+    //
+    // Subscription management moved here from Settings (2026-11-06), so
+    // the Manage tab is the only place for it: Refresh All in the header,
+    // per-subscription enable / rename / reorder / remove in the detail
+    // page, and bulk remove below. Settings keeps only manga repositories.
     private var subscriptionSection: some View {
         Section {
             ForEach(store.subscriptions) { entry in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.title).lineLimit(1)
-                        Text(entry.address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                NavigationLink(destination: FinchSubscriptionDetailView(entry: entry)) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title).lineLimit(1)
+                            Text(finchSubscriptionStatus(entry, store: store)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        if store.subscriptionErrors[entry.address] != nil {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        }
                     }
-                    Spacer()
-                    Button(role: .destructive) {
-                        pendingSubscriptionDelete = entry
-                        showingSubscriptionDeleteConfirm = true
-                    } label: { Label("删除", systemImage: "trash") }
+                }
+            }
+            if store.subscriptions.count > 1 {
+                NavigationLink(destination: FinchRemoveSubscriptionsView()) {
+                    Label("批量删除订阅", systemImage: "trash.fill").foregroundStyle(.red)
                 }
             }
         } header: {
-            Text("订阅")
+            HStack {
+                Text("订阅")
+                Spacer()
+                if store.importing {
+                    ProgressView().controlSize(.small)
+                } else if !store.subscriptions.isEmpty {
+                    Button { Task { await store.refreshSubscriptions() } } label: {
+                        Label("全部刷新", systemImage: "arrow.clockwise")
+                    }
+                    .font(.footnote.weight(.semibold)).textCase(nil).tint(.secondary)
+                }
+            }
         } footer: {
             Text("删除整个订阅会删掉它包含的全部源。订阅里的单个源只能删除本地源，远程源请隐藏或删除整个订阅。")
+            if let message = store.importError ?? store.notice { Text(message) }
         }
     }
 
@@ -547,6 +554,139 @@ private struct FinchRowTagModifier: ViewModifier {
             content.tag(key)
         } else {
             content
+        }
+    }
+}
+
+/// What a subscription row shows as its secondary line: refresh failure,
+/// switched off, not loaded yet, or its source count. Same wording as the
+/// old Settings row, minus the L10n lookup (this page is Chinese-first).
+private func finchSubscriptionStatus(_ entry: SubscriptionEntry, store: Store) -> String {
+    if store.subscriptionErrors[entry.address] != nil { return "刷新失败" }
+    if !entry.enabled { return "已停用" }
+    guard let copy = store.documents[entry.address] else { return "未加载" }
+    return "\(copy.sites.count) 个源"
+}
+
+/// One subscription's settings, moved out of Settings (2026-11-06): the
+/// Manage tab is the only place for source import and management, so the
+/// enable toggle, rename, reorder and remove live here now. The sections
+/// are split out so the body stays inside the type-check budget.
+private struct FinchSubscriptionDetailView: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let entry: SubscriptionEntry
+    @State private var confirmsRemoval = false
+
+    private var current: SubscriptionEntry {
+        store.subscriptions.first { $0.address == entry.address } ?? entry
+    }
+
+    private var index: Int {
+        store.subscriptions.firstIndex { $0.address == entry.address } ?? 0
+    }
+
+    var body: some View {
+        Form {
+            detailMainSection
+            if store.subscriptions.count > 1 {
+                detailOrderSection
+            }
+            Section {
+                Button("删除订阅", role: .destructive) { confirmsRemoval = true }
+            }
+        }
+        .navigationTitle(current.title)
+        .confirmationDialog("删除订阅", isPresented: $confirmsRemoval) {
+            Button("删除", role: .destructive) { store.removeSubscription(current); dismiss() }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("将删除整个订阅及其全部源，数据也会一并清除，无法恢复。")
+        }
+    }
+
+    private var detailMainSection: some View {
+        let failure = store.subscriptionErrors[entry.address]
+        let copy = store.documents[entry.address]
+        return Section {
+            Toggle(isOn: Binding(get: { current.enabled }, set: { on in Task { await store.setSubscription(current, enabled: on) } })) {
+                Text("启用订阅")
+            }
+            .disabled(store.importing)
+            LabeledContent("名称") {
+                TextField("名称", text: Binding(get: { current.name }, set: { store.renameSubscription(current, to: $0) }),
+                          prompt: Text(SubscriptionEntry(address: current.address).title))
+                    .labelsHidden().multilineTextAlignment(.trailing)
+            }
+            LabeledContent("订阅地址") {
+                Text(current.address).lineLimit(2).truncationMode(.middle).textSelection(.enabled).foregroundStyle(.secondary)
+            }
+        } footer: {
+            if let failure { Text("刷新失败：\(failure)") }
+            else if let copy { Text("源：\(copy.sites.count) 个 · 直播：\(copy.lives.count) 个") }
+        }
+    }
+
+    private var detailOrderSection: some View {
+        Section("顺序") {
+            if index > 0 { Button("上移") { store.moveSubscription(current, by: -1) } }
+            if index < store.subscriptions.count - 1 { Button("下移") { store.moveSubscription(current, by: 1) } }
+        }
+    }
+}
+
+/// Removing many subscriptions at once: tick them, or take all or the
+/// switched-off ones, then remove. Moved out of Settings with the rest of
+/// subscription management (2026-11-06).
+private struct FinchRemoveSubscriptionsView: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection: Set<String> = []
+    @State private var confirmsRemoval = false
+
+    private var all: Bool {
+        !store.subscriptions.isEmpty && selection.count == store.subscriptions.count
+    }
+
+    private var off: [String] {
+        store.subscriptions.filter { !$0.enabled }.map(\.address)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Button(all ? "取消全选" : "全选") {
+                    selection = all ? [] : Set(store.subscriptions.map(\.address))
+                }
+                if !off.isEmpty { Button("选择已停用的订阅") { selection = Set(off) } }
+            }
+            Section {
+                ForEach(store.subscriptions) { entry in
+                    let selected = selection.contains(entry.address)
+                    Button {
+                        if selected { selection.remove(entry.address) } else { selection.insert(entry.address) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selected ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                            Text(entry.title).lineLimit(1).foregroundStyle(.primary)
+                            Spacer(minLength: 6)
+                            Text(finchSubscriptionStatus(entry, store: store)).lineLimit(1).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            Section {
+                Button("删除已选 (\(selection.count))", role: .destructive) { confirmsRemoval = true }
+                    .disabled(selection.isEmpty)
+            }
+        }
+        .navigationTitle("批量删除订阅")
+        .confirmationDialog("删除订阅", isPresented: $confirmsRemoval) {
+            Button("删除", role: .destructive) { store.removeSubscriptions(selection); dismiss() }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("将删除所选 \(selection.count) 个订阅及其全部源，数据也会一并清除，无法恢复。")
         }
     }
 }
