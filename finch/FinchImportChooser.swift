@@ -275,7 +275,7 @@ struct FinchFwdPickerView: View {
                     if let status = status(for: widget) {
                         Text(status)
                             .font(.caption2)
-                            .foregroundStyle(status.hasPrefix("有更新") ? .orange : .tertiary)
+                            .foregroundStyle(status.hasPrefix("有更新") ? Color.orange : Color.secondary)
                             .lineLimit(1)
                     }
                 }
