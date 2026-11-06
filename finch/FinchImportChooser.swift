@@ -6,7 +6,7 @@ import TVCore
 /// as the only import entry. Tapping a row opens the matching input: a URL
 /// field, the file picker, or the .fwd checkbox list.
 enum FinchURLImportKind: CaseIterable, Hashable {
-    case subscription, rexComponent, rexSubscription, webHome, localFile
+    case subscription, rexComponent, rexSubscription, webHome, localFile, localFolder
 
     var title: String {
         switch self {
@@ -15,6 +15,7 @@ enum FinchURLImportKind: CaseIterable, Hashable {
         case .rexSubscription: return "Rex 订阅"
         case .webHome: return "网页源"
         case .localFile: return "本地文件"
+        case .localFolder: return "从文件夹导入"
         }
     }
 
@@ -25,6 +26,7 @@ enum FinchURLImportKind: CaseIterable, Hashable {
         case .rexSubscription: return "填 .fwd 清单地址，勾选导入"
         case .webHome: return "填 .html 网页源地址"
         case .localFile: return "py / js / TVBox 配置 / 网页源，可多选"
+        case .localFolder: return "文件夹里的 .json / .py / .js 文件全部导入"
         }
     }
 
@@ -35,7 +37,7 @@ enum FinchURLImportKind: CaseIterable, Hashable {
         case .rexComponent: return "https://…/component.js"
         case .rexSubscription: return "https://…/widgets.fwd"
         case .webHome: return "https://…/page.html"
-        case .localFile: return nil
+        case .localFile, .localFolder: return nil
         }
     }
 
@@ -127,7 +129,9 @@ struct FinchURLInputView: View {
                 }
                 let sites = try await store.importDownloadedFile(data: data, filename: filename)
                 result = sites.isEmpty ? "已导入，没有新增源（可能是重复导入）。" : FinchImportSummary.text(for: sites)
-            case .rexSubscription, .localFile:
+            case .rexSubscription, .localFile, .localFolder:
+                // Unreachable: these kinds open no URL field (see
+                // takesURL), but the switch must stay exhaustive.
                 result = "请用对应的入口导入。"
             }
         } catch {
