@@ -124,28 +124,40 @@ struct FinchSourceManagementView: View {
         .navigationTitle("源管理")
         .toolbar { managementToolbar }
         .confirmationDialog("删除源", isPresented: $showingSiteDeleteConfirm) {
-            Button("删除", role: .destructive) {
-                store.hardDeleteSites(pendingSiteDelete.map { ($0.site, $0.origin) })
-                pendingSiteDelete = []
-                selection.removeAll()
-                editMode = .inactive
-            }
-            Button("取消", role: .cancel) { pendingSiteDelete = [] }
+            siteDeleteDialogActions
         } message: {
             Text("将彻底删除 \(pendingSiteDelete.count) 个源，数据也会一并清除，无法恢复。")
         }
         .confirmationDialog("删除订阅", isPresented: $showingSubscriptionDeleteConfirm) {
-            Button("删除", role: .destructive) {
-                if let entry = pendingSubscriptionDelete { store.removeSubscription(entry) }
-                pendingSubscriptionDelete = nil
-            }
-            Button("取消", role: .cancel) { pendingSubscriptionDelete = nil }
+            subscriptionDeleteDialogActions
         } message: {
             Text("将删除整个订阅及其全部源，数据也会一并清除，无法恢复。")
         }
         .sheet(item: $editingSite) { site in
             editSheet(site: site)
         }
+    }
+
+    /// Dialog actions kept as their own expressions so the List's modifier
+    /// chain stays inside the type-check budget (see `body`).
+    @ViewBuilder
+    private var siteDeleteDialogActions: some View {
+        Button("删除", role: .destructive) {
+            store.hardDeleteSites(pendingSiteDelete.map { ($0.site, $0.origin) })
+            pendingSiteDelete = []
+            selection.removeAll()
+            editMode = .inactive
+        }
+        Button("取消", role: .cancel) { pendingSiteDelete = [] }
+    }
+
+    @ViewBuilder
+    private var subscriptionDeleteDialogActions: some View {
+        Button("删除", role: .destructive) {
+            if let entry = pendingSubscriptionDelete { store.removeSubscription(entry) }
+            pendingSubscriptionDelete = nil
+        }
+        Button("取消", role: .cancel) { pendingSubscriptionDelete = nil }
     }
 
     @ViewBuilder
