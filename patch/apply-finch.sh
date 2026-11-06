@@ -643,6 +643,159 @@ patch("App/SitesView.swift",
 """,
       "SitesView delete confirmation")
 
+# --- SitesView: flat source list in the Sources tab (non-pick mode),
+# mirroring the Manage list. The user (2026-11-07) found the Sources tab
+# slow because sources are grouped by subscription and you have to flip
+# through the groups one by one ("分组太多，要一个个翻"). In normal mode
+# the tab now shows every visible source grouped by content category only
+# (影视 / 短剧 / 动漫 / 成人 / 网盘 / 其他), with the same category chips
+# and sort (按名字 / 按使用频率) as Manage. Pick mode (choosing a source
+# for something else) keeps the upstream groups untouched. ---
+patch("App/SitesView.swift",
+      "    @State private var showingSiteDeleteConfirm = false\n",
+      "    @State private var showingSiteDeleteConfirm = false\n    /// Flat Sources-tab view (non-pick mode): the category filter and sort,\n    /// mirroring the Manage list. nil category = 全部; default sort is by name.\n    @State private var selectedCategory: FinchSourceCategory? = nil\n    @State private var sortMode: FinchSourceSort = .name\n",
+      "SitesView flat state")
+patch("App/SitesView.swift",
+      "    private func groupHeader(_ group: SourceGroup, origin: URL) -> some View {\n",
+      """    /// One source in the flat Sources-tab list: its "<origin>|<sourceKey>"
+    /// key (unique per subscription, so the same source in two
+    /// subscriptions is two rows), the site, and its own origin.
+    private struct FlatSourceRow: Identifiable {
+        let key: String
+        let site: Site
+        let origin: URL
+        var id: String { key }
+    }
+
+    /// Flat source list for the Sources tab (non-pick mode): every visible
+    /// source, grouped by content category only — no subscription groups to
+    /// flip through. Mirrors the Manage list: category chips, sort by name
+    /// or by how often the source was opened, search by name. A source's
+    /// category and usage key use its own origin (so a local source's
+    /// override and open count are found).
+    private var flatSections: [(category: FinchSourceCategory, rows: [FlatSourceRow])] {
+        guard let config = store.subscription else { return [] }
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var byCategory: [(category: FinchSourceCategory, rows: [FlatSourceRow])] = []
+        for group in store.sourceGroups(includeHidden: false) {
+            for site in group.sites {
+                if !text.isEmpty && !site.name.lowercased().contains(text) { continue }
+                let origin = site.origin(or: config.origin)
+                let category = FinchSourceGrouping.category(for: site, origin: origin)
+                if let selectedCategory, category != selectedCategory { continue }
+                let row = FlatSourceRow(key: FinchSourceOverrides.shared.key(site: site, origin: origin), site: site, origin: origin)
+                if let index = byCategory.firstIndex(where: { $0.category == category }) {
+                    byCategory[index].rows.append(row)
+                } else {
+                    byCategory.append((category: category, rows: [row]))
+                }
+            }
+        }
+        let categoryRank: [FinchSourceCategory: Int] = [.movie: 0, .drama: 1, .anime: 2, .adult: 3, .netdisk: 4, .other: 5]
+        var sections: [(category: FinchSourceCategory, rows: [FlatSourceRow])] = []
+        for section in byCategory {
+            var rows = section.rows
+            guard !rows.isEmpty else { continue }
+            rows.sort { a, b in
+                switch sortMode {
+                case .name:
+                    return a.site.name.localizedStandardCompare(b.site.name) == .orderedAscending
+                case .frequency:
+                    let ca = FinchSourceUsage.shared.count(forKey: a.key)
+                    let cb = FinchSourceUsage.shared.count(forKey: b.key)
+                    if ca != cb { return ca > cb }
+                    return a.site.name.localizedStandardCompare(b.site.name) == .orderedAscending
+                }
+            }
+            sections.append((category: section.category, rows: rows))
+        }
+        return sections.sorted { (categoryRank[$0.category] ?? 9) < (categoryRank[$1.category] ?? 9) }
+    }
+
+    /// Category chips + sort picker above the flat source list. Same
+    /// controls as the Manage list, so the Sources tab finds a source the
+    /// same way.
+    private var flatFilterBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    flatCategoryChip(title: "全部", selected: selectedCategory == nil) {
+                        selectedCategory = nil
+                    }
+                    ForEach(FinchSourceCategory.ordered, id: \\.self) { category in
+                        flatCategoryChip(title: category.title, selected: selectedCategory == category) {
+                            selectedCategory = category
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            Picker("排序", selection: $sortMode) {
+                Text("按名字").tag(FinchSourceSort.name)
+                Text("按使用频率").tag(FinchSourceSort.frequency)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func flatCategoryChip(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(selected ? .semibold : .regular))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                .foregroundStyle(selected ? .white : .primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The flat source list: filter bar, then one section per content
+    /// category with the source cards in a grid. Same card as the grouped
+    /// view (tap to open, usage counted, delete for local sources).
+    @ViewBuilder
+    private func flatSourceSections(config: Subscription) -> some View {
+        flatFilterBar
+        ForEach(flatSections, id: \\.category) { section in
+            Section {
+                LazyVGrid(columns: Layout.cardColumns, spacing: Layout.cardSpacing) {
+                    ForEach(section.rows) { row in
+                        RouteLink { SiteView(site: row.site, origin: config.origin, jarURL: config.spiderURL) } label: { SiteCard(site: row.site) }.tileButton()
+                            .simultaneousGesture(TapGesture().onEnded { FinchSourceUsage.shared.record(site: row.site, origin: row.origin) })
+                            .contextMenu {
+                                PinSourceButton(site: row.site, origin: config.origin)
+                                HideSourceButton(site: row.site, origin: config.origin)
+                                if store.sourceOrder.enabled { MoveSourceButtons(site: row.site, sites: store.orderedSites(config)) }
+                                if FinchSourceGrouping.isLocal(site: row.site, fallback: config.origin) {
+                                    Button(role: .destructive) {
+                                        pendingSiteDelete = [FinchSiteDelete(site: row.site, origin: row.site.origin(or: config.origin))]
+                                        showingSiteDeleteConfirm = true
+                                    } label: { Label("删除源", systemImage: "trash") }
+                                }
+                            }
+                    }
+                }
+            } header: {
+                Text("\\(section.category.title) · \\(section.rows.count) 个")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func groupHeader(_ group: SourceGroup, origin: URL) -> some View {
+""",
+      "SitesView flat helpers")
+patch("App/SitesView.swift",
+      "                            }.tvFocusSection()\n                        }\n                        ForEach(groups) { group in\n",
+      "                            }.tvFocusSection()\n                        }\n                        if pick == nil {\n                            flatSourceSections(config: config)\n                        } else {\n                            ForEach(groups) { group in\n",
+      "SitesView flat branch")
+patch("App/SitesView.swift",
+      "                                // Unfolds from under its header; folding only fades, as the groups below slide up.\n                                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -16)), removal: .opacity))\n                            }\n                        }\n                    }.pageContainer()\n",
+      "                                // Unfolds from under its header; folding only fades, as the groups below slide up.\n                                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -16)), removal: .opacity))\n                            }\n                            }\n                        }\n                    }.pageContainer()\n",
+      "SitesView flat branch close")
+
 # --- Settings (iOS Add Subscription sheet): multi-file pick + folder pick. ---
 # SwiftUI rule learned 2026-11-05: two .fileImporter modifiers on ONE view
 # shadow each other and neither presents (that is why Add from File did

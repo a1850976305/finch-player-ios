@@ -73,13 +73,6 @@ struct FinchSourceManagementView: View {
         var id: String { category.rawValue }
     }
 
-    /// Manage list sort: by name, or by how often the source was opened
-    /// (Sources tab card tap). Frequency falls back to name for ties and
-    /// for never-opened sources, so a fresh install reads as name order.
-    private enum FinchSourceSort: Hashable {
-        case name, frequency
-    }
-
     /// All rows, grouped by content category first. Inside a category,
     /// rows are in runtime order (Py, web, Rex, JS, other). A runtime
     /// filter (from a "站源订阅" row) keeps only that runtime's rows.

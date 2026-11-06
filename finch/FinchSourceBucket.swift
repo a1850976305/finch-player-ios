@@ -164,3 +164,11 @@ enum FinchSourceGrouping {
         return counts
     }
 }
+
+/// Sort for the source lists (Manage and the Sources tab): by name, or by
+/// how often the source was opened (Sources tab card tap). Frequency falls
+/// back to name for ties and for never-opened sources, so a fresh install
+/// reads as name order.
+enum FinchSourceSort: Hashable {
+    case name, frequency
+}
