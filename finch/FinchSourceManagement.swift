@@ -413,7 +413,7 @@ struct FinchSourceManagementView: View {
                 Section("备注") {
                     TextField("显示名称（备注），留空用原名", text: $editRemark)
                 }
-                Section("分类") {
+                Section {
                     Picker("分类", selection: $editCategory) {
                         Text("自动").tag(FinchSourceCategory?.none)
                         ForEach(FinchSourceCategory.ordered, id: \.self) { category in
@@ -421,6 +421,8 @@ struct FinchSourceManagementView: View {
                         }
                     }
                     .pickerStyle(.menu)
+                } header: {
+                    Text("分类")
                 } footer: {
                     Text("自动按源名归类；选一个分类就固定用它。")
                 }
