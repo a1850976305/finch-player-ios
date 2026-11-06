@@ -468,33 +468,13 @@ patch("App/Store.swift",
 """,
       "Store folder import")
 
-# --- SitesView: Manage button + sheet, and Delete in the card menu. ---
+# --- SitesView: Delete in the card menu. (2026-11-06: the in-SitesView
+# "管理" button + sheet were removed — the bottom 管理 tab is now the only
+# management entry point; the SitesView page itself stays as the Sources tab.)
 patch("App/SitesView.swift",
       "    @State private var choosingHidden = false\n",
-      "    @State private var choosingHidden = false\n    @State private var managingSources = false\n    @State private var pendingSiteDelete: [FinchSiteDelete] = []\n    @State private var showingSiteDeleteConfirm = false\n",
+      "    @State private var choosingHidden = false\n    @State private var pendingSiteDelete: [FinchSiteDelete] = []\n    @State private var showingSiteDeleteConfirm = false\n",
       "SitesView managing state")
-patch("App/SitesView.swift",
-      """                .sheet(isPresented: $choosingHidden) { HiddenSourcesEditor() }
-""",
-      """                .sheet(isPresented: $choosingHidden) { HiddenSourcesEditor() }
-                .sheet(isPresented: $managingSources) { FinchSourceManagementView() }
-""",
-      "SitesView management sheet")
-patch("App/SitesView.swift",
-      """        .modifier(SitesTitle(picking: pick != nil))
-        .task(id: store.section) {
-""",
-      """        .modifier(SitesTitle(picking: pick != nil))
-        .toolbar {
-            if pick == nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("管理") { managingSources = true }
-                }
-            }
-        }
-        .task(id: store.section) {
-""",
-      "SitesView manage toolbar")
 patch("App/SitesView.swift",
       """                                            .contextMenu {
                                                 PinSourceButton(site: site, origin: config.origin)
@@ -751,6 +731,95 @@ patch("App/SettingsView.swift",
       "        .sheet(isPresented: $addingSubscription) { AddSubscriptionSheet() }\n",
       "",
       "Settings remove AddSubscriptionSheet presentation")
+PYEOF
+
+# Settings subscriptions section removed (2026-11-06): the Manage tab is
+# now the only place for subscription import and management — refresh,
+# enable, rename, reorder and remove all live in
+# FinchSourceManagementView (see its "订阅" section). Settings keeps only
+# the manga repositories, in their own section, hidden when there are none.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label}: pattern not found in {path}; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"{label}: patched")
+
+patch("App/SettingsView.swift",
+      """            Section {
+                ForEach(store.subscriptions) { entry in
+                    let failure = store.subscriptionErrors[entry.address]
+                    FormLink(symbol: failure == nil ? "list.bullet.rectangle.fill" : "exclamationmark.triangle.fill",
+                             tint: failure != nil ? .orange : entry.enabled ? .blue : .gray,
+                             title: entry.title, value: store.subscriptionValue(entry), warning: failure != nil) {
+                        SubscriptionDetailView(entry: entry)
+                    }
+                }
+                ForEach(MangaStore.shared.repositories, id: \\.self) { url in
+                    FormLink(symbol: "books.vertical.fill", tint: .orange, title: MangaSources.title(of: url), value: L10n.text("Manga")) {
+                        MangaRepositoryView(url: url)
+                    }
+                }
+                if store.subscriptions.count > 1 {
+                    FormLink(symbol: "trash.fill", tint: .red, title: L10n.text("Remove Subscriptions")) { RemoveSubscriptionsView() }
+                }
+                #if os(iOS)
+                // Finch: subscription import moved to the Manage view
+                // (TVBox URL, file, folder, .fwd) — no add row here.
+                #else
+                TextField(L10n.text("Subscription URL (TVBox JSON, M3U or TXT)"), text: $store.subscriptionAddress, prompt: Text(L10n.text("Subscription URL (TVBox JSON, M3U or TXT)")))
+                    .labelsHidden()
+                    .autocorrectionDisabled()
+                    .onSubmit { add() }
+                TextField(L10n.text("Name (optional)"), text: $store.subscriptionName, prompt: Text(L10n.text("Name (optional)")))
+                    .labelsHidden()
+                    .onSubmit { add() }
+                subscriptionActions
+                #endif
+            } header: {
+                #if os(iOS)
+                HStack {
+                    Text(L10n.text("Subscriptions"))
+                    Spacer()
+                    if store.importing {
+                        ProgressView().controlSize(.small)
+                    } else if !store.subscriptions.isEmpty {
+                        // Quiet, in the header's own grey: a page of settings has no one blue action.
+                        Button { Task { await store.refreshSubscriptions() } } label: {
+                            Label(L10n.text("Refresh All"), systemImage: "arrow.clockwise")
+                        }
+                        .font(.footnote.weight(.semibold)).textCase(nil).tint(.secondary)
+                    }
+                }
+                #else
+                Text(L10n.text("Subscriptions"))
+                #endif
+            } footer: {
+                if let message = store.importError ?? store.notice { Text(message) }
+            }
+""",
+      """            // Finch: subscription import and management live only in the
+            // Manage tab now — refresh, enable, rename, reorder and remove
+            // are all in FinchSourceManagementView. Settings keeps only the
+            // manga repositories.
+            if !MangaStore.shared.repositories.isEmpty {
+                Section {
+                    ForEach(MangaStore.shared.repositories, id: \\.self) { url in
+                        FormLink(symbol: "books.vertical.fill", tint: .orange, title: MangaSources.title(of: url), value: L10n.text("Manga")) {
+                            MangaRepositoryView(url: url)
+                        }
+                    }
+                } header: {
+                    Text(L10n.text("Manga"))
+                }
+            }
+""",
+      "Settings remove Subscriptions section")
 PYEOF
 
 # Rex components (2026-11-06): a Rex component is a .js file, but it is NOT
