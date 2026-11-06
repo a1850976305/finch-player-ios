@@ -295,7 +295,7 @@ def patch(path, old, new, label):
 
 # --- Finch source files into App/ ---
 import shutil, os
-for name in ("FinchSourceOverrides.swift", "FinchSourceManagement.swift", "FinchSourceBucket.swift"):
+for name in ("FinchSourceOverrides.swift", "FinchSourceManagement.swift", "FinchSourceBucket.swift", "FinchSourceCategory.swift", "FinchSourceIcons.swift", "FinchRexSubscription.swift", "FinchImportChooser.swift"):
     src = pathlib.Path("../finch") / name
     if not src.exists():
         print(f"finch/{name} missing; refusing to patch blindly", file=sys.stderr)
@@ -430,6 +430,7 @@ patch("App/Store.swift",
                 if let entry = subscriptions.first(where: { $0.address == address }) { keep(kept, for: entry) }
             }
             FinchSourceOverrides.shared.removeEdits(forKeys: keys)
+            FinchSourceOverrides.shared.removeCategories(forKeys: keys)
         }
         if !whole.isEmpty { removeSubscriptions(whole) }
         rebuildSubscription()
@@ -515,10 +516,12 @@ patch("App/SitesView.swift",
 """,
       "SitesView card delete menu")
 
-# --- SitesView: group sites by type inside each group (Py / web / Rex /
-# JS), and mark local (imported-file) groups with a "本地 ·" prefix, so
-# subscription vs local and Py vs HTML are visible at a glance. Group
-# structure, fold state, drag-reorder and search all stay upstream's. ---
+# --- SitesView: group sites by content category first inside each group
+# (影视 / 短剧 / 动漫 / 成人 / 网盘 / 其他), sites in runtime order
+# inside a category, and mark local (imported-file) groups with a
+# "本地 ·" prefix, so category, subscription vs local and Py vs HTML are
+# visible at a glance. Group structure, fold state, drag-reorder and
+# search all stay upstream's. ---
 patch("App/SitesView.swift",
       """                                LazyVGrid(columns: Layout.cardColumns, spacing: Layout.cardSpacing) {
                                     ForEach(group.sites) { site in
@@ -545,9 +548,9 @@ patch("App/SitesView.swift",
                                 }
 """,
       """                                LazyVGrid(columns: Layout.cardColumns, spacing: Layout.cardSpacing) {
-                                    ForEach(FinchSourceGrouping.bucketed(group.sites), id: \\.0) { bucket, bucketSites in
+                                    ForEach(FinchSourceGrouping.categorized(group.sites, origin: config.origin), id: \\.0) { category, categorySites in
                                         Section {
-                                            ForEach(bucketSites) { site in
+                                            ForEach(categorySites) { site in
                                                 if let pick {
                                                     Button { pick(site); dismiss() } label: { SiteCard(site: site, chosen: site.key == picked) }.tileButton()
                                                         .accessibilityAddTraits(site.key == picked ? .isSelected : [])
@@ -569,7 +572,7 @@ patch("App/SitesView.swift",
                                                 }
                                             }
                                         } header: {
-                                            Text(bucket.title)
+                                            Text("\(category.title) · \(categorySites.count) 个")
                                                 .font(.subheadline)
                                                 .foregroundStyle(.secondary)
                                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -577,7 +580,7 @@ patch("App/SitesView.swift",
                                     }
                                 }
 """,
-      "SitesView type sub-sections")
+      "SitesView category sub-sections")
 patch("App/SitesView.swift",
       "                            groupHeader(group)\n",
       "                            groupHeader(group, origin: config.origin)\n",
@@ -595,6 +598,15 @@ patch("App/SitesView.swift",
       """                Text((FinchSourceGrouping.isLocalGroup(group, fallback: origin) ? "本地 · " : "") + L10n.text(group.title)).font(.headline).lineLimit(1)
 """,
       "SitesView local group badge")
+# --- SiteCard: show type + origin under the name ("Py · 本地"), so the
+# card says what kind of source it is without opening it. The original
+# expression is kept intact and the suffix appended. ---
+patch("App/SitesView.swift",
+      """        let detail = runs ? (label.parts.dropFirst() + [engine].compactMap { $0 }).joined(separator: " · ") : site.compatibility
+""",
+      """        let detail = (runs ? (label.parts.dropFirst() + [engine].compactMap { $0 }).joined(separator: " · ") : site.compatibility) + (FinchSourceGrouping.cardSuffix(for: site, fallback: store.subscription?.origin).map { " · \\($0)" } ?? "")
+""",
+      "SiteCard Finch detail suffix")
 patch("App/SitesView.swift",
       """        .onChange(of: query) { old, new in
             if old.isEmpty && !new.isEmpty {
@@ -623,7 +635,7 @@ patch("App/SitesView.swift",
             }
             Button("取消", role: .cancel) { pendingSiteDelete = [] }
         } message: {
-            Text("将彻底删除 \\(pendingSiteDelete.count) 个源，数据也会一并清除，无法恢复。")
+            Text("将彻底删除 \\(pendingSiteDelete.count == 1 ? "「\\(pendingSiteDelete[0].site.name)」" : "\\(pendingSiteDelete.count) 个源（\\(pendingSiteDelete.prefix(3).map(\\.site.name).joined(separator: "、"))\\(pendingSiteDelete.count > 3 ? "等" : "")）")，数据也会一并清除，无法恢复。")
         }
     }
 """,
