@@ -95,130 +95,168 @@ struct FinchSourceManagementView: View {
     var body: some View {
         NavigationStack {
             if store.subscription != nil {
-                List(selection: $selection) {
-                    ForEach(sections) { section in
-                        Section(section.title) {
-                            ForEach(section.rows) { row in
-                                rowContent(row)
-                                    .swipeActions(edge: .trailing) {
-                                        if row.local {
-                                            Button(role: .destructive) {
-                                                pendingSiteDelete = [FinchSiteDelete(site: row.site, origin: row.origin)]
-                                                showingSiteDeleteConfirm = true
-                                            } label: { Label("删除", systemImage: "trash") }
-                                        } else {
-                                            HideSourceButton(site: row.site, origin: row.origin)
-                                        }
-                                        Button {
-                                            startEdit(row)
-                                        } label: { Label("编辑", systemImage: "pencil") }
-                                        .tint(.orange)
-                                    }
-                            }
-                        }
-                    }
-                    Section("订阅") {
-                        ForEach(store.subscriptions) { entry in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.title).lineLimit(1)
-                                    Text(entry.address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer()
-                                Button(role: .destructive) {
-                                    pendingSubscriptionDelete = entry
-                                    showingSubscriptionDeleteConfirm = true
-                                } label: { Label("删除", systemImage: "trash") }
-                            }
-                        }
-                    } footer: {
-                        Text("删除整个订阅会删掉它包含的全部源。订阅里的单个源只能删除本地源，远程源请隐藏或删除整个订阅。")
-                    }
-                }
-                .environment(\.editMode, $editMode)
-                .navigationTitle("源管理")
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        if editMode.isEditing {
-                            Button(allSelected ? "取消全选" : "全选") {
-                                if allSelected { selection.removeAll() } else { selection = Set(localKeys) }
-                            }
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(editMode.isEditing ? "完成" : "编辑") {
-                            if editMode.isEditing {
-                                selection.removeAll()
-                                editMode = .inactive
-                            } else {
-                                editMode = .active
-                            }
-                        }
-                        .disabled(sections.isEmpty)
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        if editMode.isEditing {
-                            Button("删除 (\(selection.count))", role: .destructive) {
-                                pendingSiteDelete = selectedDeletes()
-                                showingSiteDeleteConfirm = true
-                            }
-                            .disabled(selection.isEmpty)
-                        } else {
-                            Button("完成") { dismiss() }
-                        }
-                    }
-                }
-                .confirmationDialog("删除源", isPresented: $showingSiteDeleteConfirm) {
-                    Button("删除", role: .destructive) {
-                        store.hardDeleteSites(pendingSiteDelete.map { ($0.site, $0.origin) })
-                        pendingSiteDelete = []
-                        selection.removeAll()
-                        editMode = .inactive
-                    }
-                    Button("取消", role: .cancel) { pendingSiteDelete = [] }
-                } message: {
-                    Text("将彻底删除 \(pendingSiteDelete.count) 个源，数据也会一并清除，无法恢复。")
-                }
-                .confirmationDialog("删除订阅", isPresented: $showingSubscriptionDeleteConfirm) {
-                    Button("删除", role: .destructive) {
-                        if let entry = pendingSubscriptionDelete { store.removeSubscription(entry) }
-                        pendingSubscriptionDelete = nil
-                    }
-                    Button("取消", role: .cancel) { pendingSubscriptionDelete = nil }
-                } message: {
-                    Text("将删除整个订阅及其全部源，数据也会一并清除，无法恢复。")
-                }
-                .sheet(item: $editingSite) { site in
-                    NavigationStack {
-                        Form {
-                            Section("地址") {
-                                TextField("源地址", text: $editApi)
-                                    .autocorrectionDisabled()
-                                    .textInputAutocapitalization(.never)
-                            }
-                            Section("备注") {
-                                TextField("显示名称（备注），留空用原名", text: $editRemark)
-                            }
-                        }
-                        .navigationTitle("编辑源")
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("取消") { editingSite = nil }
-                            }
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("保存") {
-                                    if let origin = editingOrigin {
-                                        FinchSourceOverrides.shared.saveEdit(site: site, origin: origin, api: editApi, remark: editRemark)
-                                        store.reloadAfterFinchSourceChange()
-                                    }
-                                    editingSite = nil
-                                }
-                            }
-                        }
-                    }
-                }
+                // AnyView here is deliberate: the management list's full
+                // modifier chain (two confirmation dialogs + sheet) made the
+                // Swift 6.2 type checker time out on `body` (Xcode 26.3,
+                // 2026-11-06, "unable to type-check this expression in
+                // reasonable time"). Erasing the list's type at this seam
+                // keeps the checker's budget small; the rows inside the
+                // List are unaffected.
+                AnyView(managementList)
             } else {
                 ContentUnavailableView("还没有源", systemImage: "square.grid.2x2", description: Text("先在设置里添加一个订阅。"))
+            }
+        }
+    }
+
+    /// The management list, split out of `body`: the single giant body
+    /// expression exceeded the Swift 6.2 type-check budget (Xcode 26.3,
+    /// 2026-11-06, "unable to type-check this expression in reasonable
+    /// time"), so the list, its sections, toolbar and edit sheet are
+    /// separate expressions, each with its own type-check budget.
+    /// Same UI, same behaviour.
+    private var managementList: some View {
+        List(selection: $selection) {
+            sourceSections
+            subscriptionSection
+        }
+        .environment(\.editMode, $editMode)
+        .navigationTitle("源管理")
+        .toolbar { managementToolbar }
+        .confirmationDialog("删除源", isPresented: $showingSiteDeleteConfirm) {
+            Button("删除", role: .destructive) {
+                store.hardDeleteSites(pendingSiteDelete.map { ($0.site, $0.origin) })
+                pendingSiteDelete = []
+                selection.removeAll()
+                editMode = .inactive
+            }
+            Button("取消", role: .cancel) { pendingSiteDelete = [] }
+        } message: {
+            Text("将彻底删除 \(pendingSiteDelete.count) 个源，数据也会一并清除，无法恢复。")
+        }
+        .confirmationDialog("删除订阅", isPresented: $showingSubscriptionDeleteConfirm) {
+            Button("删除", role: .destructive) {
+                if let entry = pendingSubscriptionDelete { store.removeSubscription(entry) }
+                pendingSubscriptionDelete = nil
+            }
+            Button("取消", role: .cancel) { pendingSubscriptionDelete = nil }
+        } message: {
+            Text("将删除整个订阅及其全部源，数据也会一并清除，无法恢复。")
+        }
+        .sheet(item: $editingSite) { site in
+            editSheet(site: site)
+        }
+    }
+
+    @ViewBuilder
+    private var sourceSections: some View {
+        ForEach(sections) { section in
+            Section(section.title) {
+                ForEach(section.rows) { row in
+                    rowContent(row)
+                        .swipeActions(edge: .trailing) {
+                            rowSwipeActions(row)
+                        }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowSwipeActions(_ row: Row) -> some View {
+        if row.local {
+            Button(role: .destructive) {
+                pendingSiteDelete = [FinchSiteDelete(site: row.site, origin: row.origin)]
+                showingSiteDeleteConfirm = true
+            } label: { Label("删除", systemImage: "trash") }
+        } else {
+            HideSourceButton(site: row.site, origin: row.origin)
+        }
+        Button {
+            startEdit(row)
+        } label: { Label("编辑", systemImage: "pencil") }
+        .tint(.orange)
+    }
+
+    private var subscriptionSection: some View {
+        Section("订阅") {
+            ForEach(store.subscriptions) { entry in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.title).lineLimit(1)
+                        Text(entry.address).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button(role: .destructive) {
+                        pendingSubscriptionDelete = entry
+                        showingSubscriptionDeleteConfirm = true
+                    } label: { Label("删除", systemImage: "trash") }
+                }
+            }
+        } footer: {
+            Text("删除整个订阅会删掉它包含的全部源。订阅里的单个源只能删除本地源，远程源请隐藏或删除整个订阅。")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var managementToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            if editMode.isEditing {
+                Button(allSelected ? "取消全选" : "全选") {
+                    if allSelected { selection.removeAll() } else { selection = Set(localKeys) }
+                }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button(editMode.isEditing ? "完成" : "编辑") {
+                if editMode.isEditing {
+                    selection.removeAll()
+                    editMode = .inactive
+                } else {
+                    editMode = .active
+                }
+            }
+            .disabled(sections.isEmpty)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            if editMode.isEditing {
+                Button("删除 (\(selection.count))", role: .destructive) {
+                    pendingSiteDelete = selectedDeletes()
+                    showingSiteDeleteConfirm = true
+                }
+                .disabled(selection.isEmpty)
+            } else {
+                Button("完成") { dismiss() }
+            }
+        }
+    }
+
+    private func editSheet(site: Site) -> some View {
+        NavigationStack {
+            Form {
+                Section("地址") {
+                    TextField("源地址", text: $editApi)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+                Section("备注") {
+                    TextField("显示名称（备注），留空用原名", text: $editRemark)
+                }
+            }
+            .navigationTitle("编辑源")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { editingSite = nil }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        if let origin = editingOrigin {
+                            FinchSourceOverrides.shared.saveEdit(site: site, origin: origin, api: editApi, remark: editRemark)
+                            store.reloadAfterFinchSourceChange()
+                        }
+                        editingSite = nil
+                    }
+                }
             }
         }
     }
