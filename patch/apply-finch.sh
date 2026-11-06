@@ -756,7 +756,7 @@ patch("App/SitesView.swift",
     @ViewBuilder
     private func flatSourceSections(config: Subscription) -> some View {
         flatFilterBar
-        ForEach(flatSections, id: \\.category) { section in
+        ForEach(flatSections, id: \\.0) { section in
             Section {
                 LazyVGrid(columns: Layout.cardColumns, spacing: Layout.cardSpacing) {
                     ForEach(section.rows) { row in
