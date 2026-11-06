@@ -745,6 +745,11 @@ patch("Sources/TVCore/ScriptSniffing.swift",
     /// What a downloaded spider is, when its content says so. Python spiders all build on the
 """,
       "Site sniffedRex")
+# NOTE: the rewritten body below MUST keep `var sites = sites` above the
+# `pending` line. Swift 6 rejects a closure that captures `sites` before
+# the local is declared ("closure captures 'sites' before it is declared");
+# the Nov 4 reorder fixed this once, and a rewrite that puts `pending`
+# first reintroduces it (build 42139969047 failed exactly this way).
 patch("Sources/TVCore/ScriptSniffing.swift",
       """        var sites = sites
         let pending = sites.indices.filter { sites[$0].needsSniffing }
@@ -767,9 +772,9 @@ patch("Sources/TVCore/ScriptSniffing.swift",
             Diagnostics.shared.record(.info, "subscription", "sniffed source=\\(sites[index].key) host=\\(URL(string: sites[index].api)?.host() ?? "-") runtime=\\(runtime.map { "\\($0)" } ?? "unknown")")
         }
 """,
-      """        let pending = sites.indices.filter { sites[$0].needsSniffing || sites[$0].needsRexSniffing }
+      """        var sites = sites
+        let pending = sites.indices.filter { sites[$0].needsSniffing || sites[$0].needsRexSniffing }
         guard !pending.isEmpty else { return self }
-        var sites = sites
         let found = await withTaskGroup(of: (Int, SourceRuntime?, Bool).self) { group in
             for index in pending {
                 let site = sites[index], origin = origin
