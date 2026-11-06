@@ -19,6 +19,26 @@ sed -i '' 's/CFBundleDisplayName: Yingxia/CFBundleDisplayName: Finch Player/' pr
 sed -i '' 's/com\.jo32\.yingxia\.ios/com.finch.player.ios/' project.yml 2>/dev/null \
   || sed -i 's/com\.jo32\.yingxia\.ios/com.finch.player.ios/' project.yml
 
+# Finch app icon (2026-11-07, user chose 37号: smooth gradient + black A).
+# The iOS AppIcon catalog has three 1024 images (default, dark, tinted);
+# all three are replaced with the same Finch icon so no Yingxia icon
+# appears in any appearance. Contents.json is left alone (the filenames
+# are unchanged), so the catalog stays valid.
+ICON_SRC="../finch/AppIcon-1024.png"
+ICON_SET="Config/iOS/Assets.xcassets/AppIcon.appiconset"
+if [ ! -f "$ICON_SRC" ]; then
+  echo "finch/AppIcon-1024.png missing; refusing to patch blindly" >&2
+  exit 1
+fi
+for name in AppIcon.png AppIcon-Dark.png AppIcon-Tinted.png; do
+  if [ ! -f "$ICON_SET/$name" ]; then
+    echo "$ICON_SET/$name missing; refusing to patch blindly" >&2
+    exit 1
+  fi
+  cp "$ICON_SRC" "$ICON_SET/$name"
+done
+echo "Finch app icon installed (AppIcon.png, AppIcon-Dark.png, AppIcon-Tinted.png)"
+
 # Swift 6.2 type-check fix (Xcode 26.3 runner, 2026-11-04): the one-line
 # map expression in Pan115Files.derive exceeds the compiler's
 # type-check budget ("unable to type-check this expression in
@@ -295,7 +315,7 @@ def patch(path, old, new, label):
 
 # --- Finch source files into App/ ---
 import shutil, os
-for name in ("FinchSourceOverrides.swift", "FinchSourceManagement.swift", "FinchSourceBucket.swift", "FinchSourceCategory.swift", "FinchSourceIcons.swift", "FinchRexSubscription.swift", "FinchImportChooser.swift"):
+for name in ("FinchSourceOverrides.swift", "FinchSourceManagement.swift", "FinchSourceBucket.swift", "FinchSourceCategory.swift", "FinchSourceIcons.swift", "FinchRexSubscription.swift", "FinchImportChooser.swift", "FinchSourceUsage.swift"):
     src = pathlib.Path("../finch") / name
     if not src.exists():
         print(f"finch/{name} missing; refusing to patch blindly", file=sys.stderr)
@@ -431,6 +451,7 @@ patch("App/Store.swift",
             }
             FinchSourceOverrides.shared.removeEdits(forKeys: keys)
             FinchSourceOverrides.shared.removeCategories(forKeys: keys)
+            FinchSourceUsage.shared.removeCounts(forKeys: keys)
         }
         if !whole.isEmpty { removeSubscriptions(whole) }
         rebuildSubscription()
@@ -538,6 +559,7 @@ patch("App/SitesView.swift",
                                                         .id(site.key)
                                                 } else {
                                                 RouteLink { SiteView(site: site, origin: config.origin, jarURL: config.spiderURL) } label: { SiteCard(site: site, dimmed: group.kind == .hidden) }.tileButton()
+                                                    .simultaneousGesture(TapGesture().onEnded { FinchSourceUsage.shared.record(site: site, origin: config.origin) })
                                                     .contextMenu {
                                                         PinSourceButton(site: site, origin: config.origin)
                                                         HideSourceButton(site: site, origin: config.origin)

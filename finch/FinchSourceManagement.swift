@@ -46,6 +46,9 @@ struct FinchSourceManagementView: View {
     @State private var editApi = ""
     @State private var editRemark = ""
     @State private var editCategory: FinchSourceCategory?
+    @State private var searchText = ""
+    @State private var selectedCategory: FinchSourceCategory? = nil
+    @State private var sortMode: FinchSourceSort = .name
     @State private var editMode: EditMode = .inactive
     @State private var selection = Set<String>()
     @State private var pendingSiteDelete: [FinchSiteDelete] = []
@@ -70,6 +73,13 @@ struct FinchSourceManagementView: View {
         var id: String { category.rawValue }
     }
 
+    /// Manage list sort: by name, or by how often the source was opened
+    /// (Sources tab card tap). Frequency falls back to name for ties and
+    /// for never-opened sources, so a fresh install reads as name order.
+    private enum FinchSourceSort: Hashable {
+        case name, frequency
+    }
+
     /// All rows, grouped by content category first. Inside a category,
     /// rows are in runtime order (Py, web, Rex, JS, other). A runtime
     /// filter (from a "站源订阅" row) keeps only that runtime's rows.
@@ -90,12 +100,27 @@ struct FinchSourceManagementView: View {
                 }
             }
         }
-        let rank: [FinchSourceBucket: Int] = [.py: 0, .html: 1, .rex: 2, .js: 3, .other: 4]
         let categoryRank: [FinchSourceCategory: Int] = [.movie: 0, .drama: 1, .anime: 2, .adult: 3, .netdisk: 4, .other: 5]
-        return bySection.map { section in
-            SectionData(category: section.category, rows: section.rows.sorted {
-                (rank[FinchSourceGrouping.bucket(for: $0.site)] ?? 9) < (rank[FinchSourceGrouping.bucket(for: $1.site)] ?? 9)
-            })
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return bySection.compactMap { section in
+            if let selectedCategory, section.category != selectedCategory { return nil }
+            var rows = section.rows
+            if !query.isEmpty {
+                rows = rows.filter { $0.site.name.lowercased().contains(query) }
+            }
+            guard !rows.isEmpty else { return nil }
+            rows.sort { a, b in
+                switch sortMode {
+                case .name:
+                    return a.site.name.localizedStandardCompare(b.site.name) == .orderedAscending
+                case .frequency:
+                    let ca = FinchSourceUsage.shared.count(forKey: a.key)
+                    let cb = FinchSourceUsage.shared.count(forKey: b.key)
+                    if ca != cb { return ca > cb }
+                    return a.site.name.localizedStandardCompare(b.site.name) == .orderedAscending
+                }
+            }
+            return SectionData(category: section.category, rows: rows)
         }.sorted { (categoryRank[$0.category] ?? 9) < (categoryRank[$1.category] ?? 9) }
     }
 
@@ -187,6 +212,51 @@ struct FinchSourceManagementView: View {
         .navigationTitle("源管理")
     }
 
+    /// A category chip or a search query is active: the list shows only
+    /// the matching sources, and the import / runtime / subscription
+    /// sections step aside until the filter clears.
+    private var isFiltering: Bool {
+        selectedCategory != nil || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Category switcher + sort control. Tapping a category shows only
+    /// that category's sources; "全部" clears it. The sort picker flips
+    /// between 按名字 and 按使用频率.
+    private var filterBar: some View {
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    categoryChip(title: "全部", selected: selectedCategory == nil) {
+                        selectedCategory = nil
+                    }
+                    ForEach(FinchSourceCategory.ordered, id: \.self) { category in
+                        categoryChip(title: category.title, selected: selectedCategory == category) {
+                            selectedCategory = category
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            Picker("排序", selection: $sortMode) {
+                Text("按名字").tag(FinchSourceSort.name)
+                Text("按使用频率").tag(FinchSourceSort.frequency)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func categoryChip(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(selected ? .semibold : .regular))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                .foregroundStyle(selected ? .white : .primary)
+        }
+        .buttonStyle(.plain)
+    }
+
     /// The management list, split out of `body`: the single giant body
     /// expression exceeded the Swift 6.2 type-check budget (Xcode 26.3,
     /// 2026-11-06, "unable to type-check this expression in reasonable
@@ -195,16 +265,20 @@ struct FinchSourceManagementView: View {
     /// Same UI, same behaviour.
     private var managementList: some View {
         List(selection: $selection) {
-            if filter == nil && !editMode.isEditing {
+            if !editMode.isEditing {
+                filterBar
+            }
+            if filter == nil && !editMode.isEditing && !isFiltering {
                 importSection
                 runtimeGroupsSection
             }
             sourceSections
-            if filter == nil && !editMode.isEditing {
+            if filter == nil && !editMode.isEditing && !isFiltering {
                 subscriptionSection
             }
         }
         .environment(\.editMode, $editMode)
+        .searchable(text: $searchText, prompt: "搜索源名称")
         .navigationTitle(filter?.title ?? "源管理")
         .toolbar { managementToolbar }
         .confirmationDialog("删除源", isPresented: $showingSiteDeleteConfirm) {
