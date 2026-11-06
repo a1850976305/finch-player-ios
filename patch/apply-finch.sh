@@ -713,6 +713,46 @@ patch("App/SettingsView.swift",
       "Settings multi-file + folder importers")
 PYEOF
 
+# Settings subscription import removed (2026-11-06): the Manage view now
+# covers every import path (TVBox URL, file, folder, .fwd), so the
+# "Add Subscription" row in Settings is redundant. Only the entry point
+# (the row + its sheet presentation) is removed: the per-subscription
+# detail rows, "Remove Subscriptions", and the "Refresh All" header stay,
+# and AddSubscriptionSheet itself stays in the file as dead code — the
+# Finch folder/multi-file patches above still apply to it, and deleting
+# the whole struct would only add patch risk for no behaviour change.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label}: pattern not found in {path}; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"{label}: patched")
+
+patch("App/SettingsView.swift",
+      """                #if os(iOS)
+                // One row instead of an always-open field and three text buttons; the address goes in a sheet.
+                Button { addingSubscription = true } label: {
+                    FormLabel(symbol: "plus", tint: .green, title: L10n.text("Add Subscription")).foregroundStyle(.primary)
+                }
+                #else
+""",
+      """                #if os(iOS)
+                // Finch: subscription import moved to the Manage view
+                // (TVBox URL, file, folder, .fwd) — no add row here.
+                #else
+""",
+      "Settings remove Add Subscription row")
+patch("App/SettingsView.swift",
+      "        .sheet(isPresented: $addingSubscription) { AddSubscriptionSheet() }\n",
+      "",
+      "Settings remove AddSubscriptionSheet presentation")
+PYEOF
+
 # Rex components (2026-11-06): a Rex component is a .js file, but it is NOT
 # a TVBox spider, so it must be detected by its WidgetMetadata marker and
 # run through RexRuntime (rex-adapter.js defines the Widget global), never
