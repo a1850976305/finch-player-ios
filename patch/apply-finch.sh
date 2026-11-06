@@ -1012,5 +1012,96 @@ patch("App/Store.swift",
       "Store local html import")
 PYEOF
 
+# --- Bottom "管理" tab: the management screen as its own tab after Sources. ---
+# The phone's tab bar is user-arranged (PhoneTabs, App/MoreView.swift) with
+# four slots, and a newer section would otherwise land in More, where it is
+# not a tab at all — so Manage is inserted after Sources once, mirroring the
+# Discover migration upstream already does. The tab reuses
+# FinchSourceManagementView with embedInNavigationStack: false: the tab's
+# RouteStack already owns a NavigationStack, and nesting a second one would
+# render a second navigation bar. The SitesView "管理" button stays as a
+# shortcut opening the same screen as a sheet.
+python3 - <<'PYEOF'
+import pathlib, sys
+
+def patch(path, old, new, label):
+    p = pathlib.Path(path)
+    text = p.read_text()
+    if old not in text:
+        print(f"{label}: pattern not found in {path}; refusing to patch blindly", file=sys.stderr)
+        sys.exit(1)
+    p.write_text(text.replace(old, new, 1))
+    print(f"{label}: patched")
+
+# AppSection.manage: raw value "Manage" so L10n resolves it to 管理 (the key
+# is added to the strings tables below). Icon is a wrench — Settings already
+# uses slider.horizontal.3, so that one is not available.
+patch("App/RootView.swift",
+      "case home = \"Watch Now\", discover = \"Discover\", live = \"Live TV\", music = \"Music\", manga = \"Manga\", search = \"Global Search\", sites = \"Sources\", files = \"Cloud Files\", favorites = \"Favorites\", history = \"Playback History\", downloads = \"Downloads\", settings = \"Settings\", more = \"More\"",
+      "case home = \"Watch Now\", discover = \"Discover\", live = \"Live TV\", music = \"Music\", manga = \"Manga\", search = \"Global Search\", sites = \"Sources\", manage = \"Manage\", files = \"Cloud Files\", favorites = \"Favorites\", history = \"Playback History\", downloads = \"Downloads\", settings = \"Settings\", more = \"More\"",
+      "AppSection manage case")
+patch("App/RootView.swift",
+      "        case .sites: \"square.grid.2x2.fill\"\n",
+      "        case .sites: \"square.grid.2x2.fill\"\n        case .manage: \"wrench.and.screwdriver\"\n",
+      "AppSection manage icon")
+patch("App/RootView.swift",
+      "        case .sites: SitesView()\n",
+      "        case .sites: SitesView()\n        case .manage: FinchSourceManagementView(embedInNavigationStack: false)\n",
+      "sectionRoot manage tab")
+# PhoneTabs: Manage sits after Sources everywhere the order is defined.
+patch("App/MoreView.swift",
+      "    static let standard = PhoneTabs(bar: [.home, .discover, .live, .search], more: [.music, .manga, .sites, .files, .history, .favorites, .downloads, .messages, .settings])",
+      "    static let standard = PhoneTabs(bar: [.home, .discover, .live, .search], more: [.music, .manga, .sites, .manage, .files, .history, .favorites, .downloads, .messages, .settings])",
+      "PhoneTabs standard manage")
+patch("App/MoreView.swift",
+      "    static let sidebarStandard: [AppSection] = [.home, .discover, .live, .music, .manga, .search, .sites, .files, .history, .favorites, .downloads, .settings]",
+      "    static let sidebarStandard: [AppSection] = [.home, .discover, .live, .music, .manga, .search, .sites, .manage, .files, .history, .favorites, .downloads, .settings]",
+      "PhoneTabs sidebar manage")
+patch("App/MoreView.swift",
+      """        // Add Discover once to an existing installation's visible tabs. Preserve their relative
+        // order; arranged(slots:) carries the last tab into More when the bar is full.
+        if !(halves[0] + halves[1]).contains(.discover) { bar.insert(.discover, at: min(1, bar.count)) }
+""",
+      """        // Add Discover once to an existing installation's visible tabs. Preserve their relative
+        // order; arranged(slots:) carries the last tab into More when the bar is full.
+        if !(halves[0] + halves[1]).contains(.discover) { bar.insert(.discover, at: min(1, bar.count)) }
+        // Add Manage once the same way, right after Sources (2026-11-06): the
+        // viewer asked for a bottom 管理 tab. If Sources is not in the bar,
+        // append to the bar instead — the best possible position, since the
+        // bar comes before More in the combined order.
+        if !(halves[0] + halves[1]).contains(.manage) {
+            if let sites = bar.firstIndex(of: .sites) { bar.insert(.manage, at: sites + 1) }
+            else { bar.append(.manage) }
+        }
+""",
+      "PhoneTabs manage migration")
+patch("App/MoreView.swift",
+      "        case .sites: Color(red: 0.60, green: 0.46, blue: 1.0)\n",
+      "        case .sites: Color(red: 0.60, green: 0.46, blue: 1.0)\n        case .manage: Color(red: 0.15, green: 0.65, blue: 0.35)\n",
+      "AppSection manage tint")
+patch("App/MoreView.swift",
+      "        case .sites: store.subscription.map { store.orderedSites($0).count }\n",
+      "        case .sites: store.subscription.map { store.orderedSites($0).count }\n        case .manage: store.subscription.map { store.orderedSites($0).count }\n",
+      "MoreView manage count")
+# "Manage" -> 管理, so the tab reads 管理 in Chinese (the raw value alone
+# would fall back to the English "Manage").
+patch("Sources/TVCore/Resources/zh-Hans.lproj/Localizable.strings",
+      "\"Manage Sources\" = \"管理点播源\";",
+      "\"Manage Sources\" = \"管理点播源\";\n\"Manage\" = \"管理\";",
+      "zh-Hans Manage string")
+patch("Sources/TVCore/Resources/zh-Hant.lproj/Localizable.strings",
+      "\"Manage Sources\" = \"管理隨選來源\";",
+      "\"Manage Sources\" = \"管理隨選來源\";\n\"Manage\" = \"管理\";",
+      "zh-Hant Manage string")
+patch("Sources/TVCore/Resources/ja.lproj/Localizable.strings",
+      "\"Manage Sources\" = \"配信ソースを管理\";",
+      "\"Manage Sources\" = \"配信ソースを管理\";\n\"Manage\" = \"管理\";",
+      "ja Manage string")
+patch("Sources/TVCore/Resources/en.lproj/Localizable.strings",
+      "\"Manage Sources\" = \"Manage Sources\";",
+      "\"Manage Sources\" = \"Manage Sources\";\n\"Manage\" = \"Manage\";",
+      "en Manage string")
+PYEOF
+
 echo "Finch branding applied. Changed lines:"
 grep -n "Finch Player\|com.finch.player.ios" project.yml || true
