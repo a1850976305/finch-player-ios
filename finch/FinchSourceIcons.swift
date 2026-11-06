@@ -59,6 +59,7 @@ enum FinchKindIcons {
         case .rexSubscription: return FinchKindIcon(symbol: "square.stack.3d.up", color: .purple)
         case .webHome: return FinchKindIcon(symbol: "globe", color: .green)
         case .localFile: return FinchKindIcon(symbol: "doc.badge.plus", color: .indigo)
+        case .localFolder: return FinchKindIcon(symbol: "folder.badge.plus", color: .orange)
         }
     }
 }
