@@ -14,7 +14,7 @@ enum FinchSourceBucket: String, CaseIterable {
         case .html: return "网页源"
         case .rex: return "Rex"
         case .js: return "JS 源"
-        case .other: return "其他"
+        case .other: return "TVBox源"
         }
     }
 
@@ -25,24 +25,33 @@ enum FinchSourceBucket: String, CaseIterable {
         case .html: return "网页"
         case .rex: return "Rex"
         case .js: return "JS"
-        case .other: return "其他"
+        case .other: return "TVBox"
         }
     }
 }
 
 /// One runtime group in the management view's "站源订阅" section (Arcane
 /// reference): each row shows its count and status, and taps through to a
-/// filtered list of that runtime's sources.
+/// filtered list of that runtime's sources. This is also the type-first
+/// grouping for the Manage list and the Sources tab (user 2026-11-07:
+/// group by source type — Py / JS / CatPaw / Rex / TVBox — not by content
+/// category). TVBox is the standard TVBox JSON/JAR source: neither Python
+/// nor JavaScript, not WebHome, not Rex, not CatPaw.
 enum FinchRuntimeGroup: Hashable {
-    case catpaw, py, rex, html, js
+    case catpaw, py, rex, html, js, tvbox
+
+    /// Display order for the type-first grouping (Manage + Sources tab):
+    /// Py, JS, CatPaw, Rex, TVBox, Web.
+    static let ordered: [FinchRuntimeGroup] = [.py, .js, .catpaw, .rex, .tvbox, .html]
 
     var title: String {
         switch self {
         case .catpaw: return "猫源"
-        case .py: return "Py 站源"
-        case .rex: return "Rex 站源"
-        case .html: return "网页站源"
-        case .js: return "JS 站源"
+        case .py: return "Py源"
+        case .rex: return "Rex源"
+        case .html: return "网页源"
+        case .js: return "JS源"
+        case .tvbox: return "TVBox源"
         }
     }
 
@@ -57,6 +66,7 @@ enum FinchRuntimeGroup: Hashable {
         case .rex: return FinchSourceGrouping.bucket(for: site) == .rex
         case .html: return FinchSourceGrouping.bucket(for: site) == .html
         case .js: return FinchSourceGrouping.bucket(for: site) == .js && !isCatPaw
+        case .tvbox: return FinchSourceGrouping.bucket(for: site) == .other
         }
     }
 }
@@ -150,15 +160,30 @@ enum FinchSourceGrouping {
         return "\(bucket(for: site).shortTitle) · \(local ? "本地" : "订阅")"
     }
 
-    /// Runtime-group counts over visible (non-hidden) sites, in display
-    /// order: 猫源, Py, Rex, 网页, JS. The JS row is only listed when it
-    /// has sites — most installs have none.
+    /// A site's source type for the type-first grouping (Manage + Sources
+    /// tab): exactly one of Py / JS / CatPaw / Rex / TVBox / Web. CatPaw
+    /// is claimed first (it reads as JavaScript at runtime); WebHome next;
+    /// then Rex; then the api runtime, with anything else as TVBox.
+    static func runtimeGroup(for site: Site) -> FinchRuntimeGroup {
+        if site.raw["catPawOpen"] != nil { return .catpaw }
+        if site.webHomePage { return .html }
+        if site.detectedRex == true { return .rex }
+        switch site.runtime {
+        case .python: return .py
+        case .javascript: return .js
+        default: return .tvbox
+        }
+    }
+
+    /// Runtime-group counts over visible (non-hidden) sites, in the
+    /// type-first display order. The JS and TVBox rows are only listed when
+    /// they have sites — most installs have none.
     static func runtimeCounts(sites: [Site]) -> [(FinchRuntimeGroup, Int)] {
-        let groups: [FinchRuntimeGroup] = [.catpaw, .py, .rex, .html, .js]
+        let groups: [FinchRuntimeGroup] = FinchRuntimeGroup.ordered
         var counts: [(FinchRuntimeGroup, Int)] = []
         for group in groups {
             let count = sites.count(where: group.matches)
-            if group == .js && count == 0 { continue }
+            if (group == .js || group == .tvbox) && count == 0 { continue }
             counts.append((group, count))
         }
         return counts

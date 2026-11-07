@@ -45,9 +45,8 @@ struct FinchSourceManagementView: View {
     @State private var editingOrigin: URL?
     @State private var editApi = ""
     @State private var editRemark = ""
-    @State private var editCategory: FinchSourceCategory?
     @State private var searchText = ""
-    @State private var selectedCategory: FinchSourceCategory? = nil
+    @State private var selectedType: FinchRuntimeGroup? = nil
     @State private var sortMode: FinchSourceSort = .name
     @State private var editMode: EditMode = .inactive
     @State private var selection = Set<String>()
@@ -67,15 +66,18 @@ struct FinchSourceManagementView: View {
     }
 
     private struct SectionData: Identifiable {
-        let category: FinchSourceCategory
+        let type: FinchRuntimeGroup
+        let local: Bool
         var rows: [Row]
-        var title: String { "\(category.title) · \(rows.count) 个" }
-        var id: String { category.rawValue }
+        var title: String { "\(type.title) · \(local ? "本地导入" : "订阅导入") · \(rows.count) 个" }
+        var id: String { "\(type)-\(local)" }
     }
 
-    /// All rows, grouped by content category first. Inside a category,
-    /// rows are in runtime order (Py, web, Rex, JS, other). A runtime
-    /// filter (from a "站源订阅" row) keeps only that runtime's rows.
+    /// All rows, grouped by source type first (Py / JS / CatPaw / Rex /
+    /// TVBox / Web), then by import origin inside a type: 订阅导入 before
+    /// 本地导入. A runtime filter (from a "站源订阅" row) keeps only that
+    /// runtime's rows. User 2026-11-07: group by type, not by content
+    /// category (no more 影视 / 短剧 / 成人 sections).
     private var sections: [SectionData] {
         guard let config = store.subscription else { return [] }
         var bySection: [SectionData] = []
@@ -83,20 +85,21 @@ struct FinchSourceManagementView: View {
             for site in group.sites {
                 if let filter, !filter.matches(site: site) { continue }
                 let origin = site.origin(or: config.origin)
-                let category = FinchSourceGrouping.category(for: site, origin: origin)
+                let type = FinchSourceGrouping.runtimeGroup(for: site)
+                let local = FinchSourceGrouping.isLocal(site: site, fallback: config.origin)
                 let row = Row(key: FinchSourceOverrides.shared.key(site: site, origin: origin),
-                              site: site, origin: origin, groupTitle: group.title, local: FinchSourceGrouping.isLocal(site: site, fallback: config.origin))
-                if let index = bySection.firstIndex(where: { $0.category == category }) {
+                              site: site, origin: origin, groupTitle: group.title, local: local)
+                if let index = bySection.firstIndex(where: { $0.type == type && $0.local == local }) {
                     bySection[index].rows.append(row)
                 } else {
-                    bySection.append(SectionData(category: category, rows: [row]))
+                    bySection.append(SectionData(type: type, local: local, rows: [row]))
                 }
             }
         }
-        let categoryRank: [FinchSourceCategory: Int] = [.movie: 0, .drama: 1, .anime: 2, .adult: 3, .netdisk: 4, .other: 5]
+        let typeRank: [FinchRuntimeGroup: Int] = [.py: 0, .js: 1, .catpaw: 2, .rex: 3, .tvbox: 4, .html: 5]
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return bySection.compactMap { section in
-            if let selectedCategory, section.category != selectedCategory { return nil }
+            if let selectedType, section.type != selectedType { return nil }
             var rows = section.rows
             if !query.isEmpty {
                 rows = rows.filter { $0.site.name.lowercased().contains(query) }
@@ -113,8 +116,12 @@ struct FinchSourceManagementView: View {
                     return a.site.name.localizedStandardCompare(b.site.name) == .orderedAscending
                 }
             }
-            return SectionData(category: section.category, rows: rows)
-        }.sorted { (categoryRank[$0.category] ?? 9) < (categoryRank[$1.category] ?? 9) }
+            return SectionData(type: section.type, local: section.local, rows: rows)
+        }.sorted {
+            let ra = typeRank[$0.type] ?? 9, rb = typeRank[$1.type] ?? 9
+            if ra != rb { return ra < rb }
+            return !$0.local && $1.local
+        }
     }
 
     /// Runtime groups over visible (non-hidden) sites, with a status line
@@ -160,7 +167,6 @@ struct FinchSourceManagementView: View {
         editingOrigin = row.origin
         editApi = row.site.api
         editRemark = FinchSourceOverrides.shared.edit(for: row.site, origin: row.origin)?.remark ?? ""
-        editCategory = FinchSourceOverrides.shared.categoryOverride(for: row.site, origin: row.origin)
     }
 
     var body: some View {
@@ -205,26 +211,26 @@ struct FinchSourceManagementView: View {
         .navigationTitle("源管理")
     }
 
-    /// A category chip or a search query is active: the list shows only
+    /// A type chip or a search query is active: the list shows only
     /// the matching sources, and the import / runtime / subscription
     /// sections step aside until the filter clears.
     private var isFiltering: Bool {
-        selectedCategory != nil || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        selectedType != nil || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Category switcher + sort control. Tapping a category shows only
-    /// that category's sources; "全部" clears it. The sort picker flips
-    /// between 按名字 and 按使用频率.
+    /// Type switcher + sort control. Tapping a type shows only that type's
+    /// sources; "全部" clears it. The sort picker flips between 按名字
+    /// and 按使用频率.
     private var filterBar: some View {
         Section {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    categoryChip(title: "全部", selected: selectedCategory == nil) {
-                        selectedCategory = nil
+                    categoryChip(title: "全部", selected: selectedType == nil) {
+                        selectedType = nil
                     }
-                    ForEach(FinchSourceCategory.ordered, id: \.self) { category in
-                        categoryChip(title: category.title, selected: selectedCategory == category) {
-                            selectedCategory = category
+                    ForEach(FinchRuntimeGroup.ordered, id: \.self) { type in
+                        categoryChip(title: type.title, selected: selectedType == type) {
+                            selectedType = type
                         }
                     }
                 }
@@ -346,7 +352,7 @@ struct FinchSourceManagementView: View {
         } header: {
             Text("添加资源")
         } footer: {
-            Text("导入的源会按内容自动分组；想换分组可以在编辑里改。")
+            Text("导入的源按类型分组：Py源、JS源、猫源、Rex源、TVBox源；订阅导入和本地导入分开列。")
         }
     }
 
@@ -549,19 +555,6 @@ struct FinchSourceManagementView: View {
                 Section("备注") {
                     TextField("显示名称（备注），留空用原名", text: $editRemark)
                 }
-                Section {
-                    Picker("分类", selection: $editCategory) {
-                        Text("自动").tag(FinchSourceCategory?.none)
-                        ForEach(FinchSourceCategory.ordered, id: \.self) { category in
-                            Text(category.title).tag(category as FinchSourceCategory?)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                } header: {
-                    Text("分类")
-                } footer: {
-                    Text("自动按源名归类；选一个分类就固定用它。")
-                }
             }
             .navigationTitle("编辑源")
             .toolbar {
@@ -572,7 +565,6 @@ struct FinchSourceManagementView: View {
                     Button("保存") {
                         if let origin = editingOrigin {
                             FinchSourceOverrides.shared.saveEdit(site: site, origin: origin, api: editApi, remark: editRemark)
-                            FinchSourceOverrides.shared.saveCategory(editCategory, site: site, origin: origin)
                             store.reloadAfterFinchSourceChange()
                         }
                         editingSite = nil

@@ -37,7 +37,7 @@ enum FinchKindIcons {
         case .html: return FinchKindIcon(symbol: "globe", color: .green)
         case .rex: return FinchKindIcon(symbol: "sparkles", color: .purple)
         case .js: return FinchKindIcon(symbol: "doc.text", color: .teal)
-        case .other: return FinchKindIcon(symbol: "questionmark", color: .gray)
+        case .other: return FinchKindIcon(symbol: "tv", color: .indigo)
         }
     }
 
@@ -48,6 +48,7 @@ enum FinchKindIcons {
         case .rex: return FinchKindIcon(symbol: "sparkles", color: .purple)
         case .html: return FinchKindIcon(symbol: "globe", color: .green)
         case .js: return FinchKindIcon(symbol: "doc.text", color: .teal)
+        case .tvbox: return FinchKindIcon(symbol: "tv", color: .indigo)
         }
     }
 
