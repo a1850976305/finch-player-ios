@@ -656,7 +656,7 @@ patch("App/SitesView.swift",
       "    @State private var showingSiteDeleteConfirm = false\n    /// Flat Sources-tab view (non-pick mode): the category filter and sort,\n    /// mirroring the Manage list. nil category = 全部; default sort is by name.\n    @State private var selectedCategory: FinchSourceCategory? = nil\n    @State private var sortMode: FinchSourceSort = .name\n",
       "SitesView flat state")
 patch("App/SitesView.swift",
-      "    private func groupHeader(_ group: SourceGroup, origin: URL) -> some View {\n",
+      "    @ViewBuilder\n    private func groupHeader(_ group: SourceGroup, origin: URL) -> some View {\n",
       """    /// One source in the flat Sources-tab list: its "<origin>|<sourceKey>"
     /// key (unique per subscription, so the same source in two
     /// subscriptions is two rows), the site, and its own origin.
@@ -784,6 +784,7 @@ patch("App/SitesView.swift",
         }
     }
 
+    @ViewBuilder
     private func groupHeader(_ group: SourceGroup, origin: URL) -> some View {
 """,
       "SitesView flat helpers")
